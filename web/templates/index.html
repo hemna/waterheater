@@ -1,106 +1,100 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Water Heater Motor Control</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Water Heater Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/main.css" rel="stylesheet">
     <script src="/static/main.js"></script>
-    <script type="text/javascript">
+    <script>
         $(document).ready(function() {
-            console.log("Document ready");
-            initial_temperature = parseInt('{{ initial_temperature|safe }}');
-            $("#currentTemperature").val(initial_temperature);
+            var initialTemp = parseInt('{{ initial_temperature|safe }}', 10) || 108;
+            $("#currentTemperature").val(initialTemp);
+            $("#tempDisplay").text(initialTemp);
+
             $("#increaseTemp").click(function() {
-                console.log("Increasing temperature");
                 socket.emit('change_temperature', {'temperature': 1});
             });
             $("#decreaseTemp").click(function() {
-                console.log("Decreasing temperature");
                 socket.emit('change_temperature', {'temperature': -1});
             });
             $("#setTemperature").click(function() {
-                console.log("Setting temperature");
-                // Set the temperature in the app to the current temperature
-                // reading on the heater
                 socket.emit('set_temperature_reading', {'temperature': $("#currentTemperature").val()});
             });
             $("#lowTemperature").click(function() {
-                console.log("Setting temperature to 97F");
                 socket.emit('set_temperature', {'temperature': 97});
             });
-            $("#normalTemperature").click(function() {
-                console.log("Setting temperature to 108F");
+            $("#highTemperature").click(function() {
                 socket.emit('set_temperature', {'temperature': 108});
             });
-            $("#mediumTemperature").click(function() {
-                console.log("Setting temperature to 115F");
-                socket.emit('set_temperature', {'temperature': 115});
+            $("#startTimer").click(function() {
+                var minutes = parseInt($("#timerDuration").val(), 10) || 30;
+                socket.emit('set_timer', {'duration_minutes': minutes});
             });
-            $("#highTemperature").click(function() {
-                console.log("Setting temperature to 120F");
-                socket.emit('set_temperature', {'temperature': 120});
+            $("#forceReset").click(function() {
+                socket.emit('force_reset', {});
             });
         });
     </script>
 </head>
 <body>
-    <h1>Water Heater Motor Control</h1>
-    <!-- Motor Control Form
-    <form id="motorForm">
-        <label>Steps: <input type="number" name="steps" value="100" min="1" required></label><br>
-        <label>Step Type:
-            <select name="steptype">
-                <option value="Full">Full</option>
-                <option value="1/2">1/2</option>
-                <option value="1/4">1/4</option>
-                <option value="1/8">1/8</option>
-                <option value="1/16">1/16</option>
-                <option value="1/32">1/32</option>
-            </select>
-        </label><br>
-        <label>Clockwise:
-            <select name="clockwise">
-                <option value="true">True</option>
-                <option value="false">False</option>
-            </select>
-        </label><br>
-        <button type="submit">Move Motor</button>
-    </form>
-    -->
-    <div id="result"></div>
-    <br><br>
-    <div class="form-floating">
-        <input id="currentTemperature" class="form-control form-control-lg" style="width: 160px;" type="number" name="temperature" value="0"></label>
-        <label for="currentTemperature">Current Temperature</label>
-      </div>
-    <br>
-    <button id="setTemperature" class="btn btn-success">Set Current Temperature</button>
-    <br><br>
-    <button id="decreaseTemp" class="btn btn-primary">Decrease Temperature</button>
-    <button id="increaseTemp" class="btn btn-danger">Increase Temperature</button>
-    <br><br>
-    <button id="lowTemperature" class="btn btn-outline-primary">Set to 97F</button>
-    <button id="normalTemperature" class="btn btn-outline-success">Set to 108F</button>
-    <button id="hotTemperature" class="btn btn-outline-warning">Set to 115F</button>
-    <button id="highTemperature" class="btn btn-outline-danger">Set to 120F</button>
-    <script>
-        document.getElementById('motorForm').onsubmit = function(e) {
-            e.preventDefault();
-            const form = e.target;
-            const data = {
-                steps: parseInt(form.steps.value),
-                steptype: form.steptype.value,
-                clockwise: form.clockwise.value === 'true'
-            };
-            document.getElementById('result').innerText = 'Moving motor...';
-            console.log("Calling move_motor");
-            socket.emit('move_motor',  data);
-        };
-        socket.on('motor_status', function(msg) {
-            document.getElementById('result').innerText = msg.message;
-        });
-    </script>
+    <div class="app">
+        <header class="app-header">
+            <h1 class="app-title">Water Heater</h1>
+            <p class="app-subtitle">Temperature & timer control</p>
+        </header>
+
+        <main class="app-main">
+            <section class="card card-temp">
+                <h2 class="card-title">Temperature</h2>
+                <div class="temp-hero">
+                    <span id="tempDisplay" class="temp-value">—</span>
+                    <span class="temp-unit">°F</span>
+                </div>
+                <div class="temp-actions">
+                    <button type="button" id="decreaseTemp" class="btn btn-ctrl btn-ctrl-down" aria-label="Decrease temperature">
+                        <span class="btn-ctrl-icon">−</span>
+                    </button>
+                    <button type="button" id="increaseTemp" class="btn btn-ctrl btn-ctrl-up" aria-label="Increase temperature">
+                        <span class="btn-ctrl-icon">+</span>
+                    </button>
+                </div>
+                <div class="temp-sync">
+                    <label for="currentTemperature" class="visually-hidden">Current reading on heater</label>
+                    <input id="currentTemperature" class="input-sync" type="number" inputmode="numeric" min="90" max="130" value="108">
+                    <button type="button" id="setTemperature" class="btn btn-sync">Sync reading</button>
+                </div>
+                <div class="temp-presets">
+                    <button type="button" id="lowTemperature" class="btn btn-preset">97°F</button>
+                    <button type="button" id="highTemperature" class="btn btn-preset btn-preset-high">108°F</button>
+                </div>
+            </section>
+
+            <section class="card card-timer">
+                <h2 class="card-title">Reset timer</h2>
+                <p class="card-desc">Return to 108°F after a set time.</p>
+                <div class="timer-set">
+                    <select id="timerDuration" class="form-select timer-select" aria-label="Reset after">
+                        <option value="15">15 min</option>
+                        <option value="30" selected>30 min</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hr</option>
+                    </select>
+                    <button type="button" id="startTimer" class="btn btn-start">Start timer</button>
+                </div>
+                <div id="timerCountdown" class="timer-countdown" role="status" aria-live="polite" hidden></div>
+                <button type="button" id="forceReset" class="btn btn-force">Force reset to 108°F</button>
+            </section>
+
+            <div id="result" class="status" role="status" aria-live="polite"></div>
+        </main>
+    </div>
 </body>
 </html>

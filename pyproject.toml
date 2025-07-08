@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "waterheater"
 version = "0.1.0"
-description = "Add your description here"
+description = "Water heater control via NEMA 17 stepper on Raspberry Pi with web UI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,3 +17,6 @@ dependencies = [
     "eventlet>=0.33",
     "flask-socketio>=5.5.1",
 ]
+
+[tool.setuptools]
+py-modules = ["main"]

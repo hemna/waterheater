@@ -37,7 +37,13 @@ EN_pin = 24 # enable pin (LOW to enable)
 
 TEMPERATURE_FILE = '/tmp/current_temperature.json'
 
-WEB_PORT=80
+RESET_TEMPERATURE = 108  # default temperature to reset to after timer
+WEB_PORT = 80
+
+# Timer state: reset to RESET_TEMPERATURE after a delay
+_timer_end_timestamp = None  # Unix time when reset will run, or None
+_timer_cancel_event = None  # threading.Event to cancel the active timer
+_timer_lock = threading.Lock()
 
 ###########################
 # Actual motor control
@@ -121,6 +127,39 @@ def set_temperature(temperature):
     sio.emit('temperature_status', {'message': f"Temperature changed to {CURRENT_TEMPERATURE} degrees"}, namespace=APP_NAMESPACE)
     sio.emit('temperature_update', {'temperature': CURRENT_TEMPERATURE}, namespace=APP_NAMESPACE)
 
+
+def _emit_timer_state():
+    """Broadcast current timer state so clients can show accurate countdown."""
+    with _timer_lock:
+        end = _timer_end_timestamp
+    payload = {'end_timestamp': end}
+    if end is not None:
+        payload['reset_temperature'] = RESET_TEMPERATURE
+    sio.emit('timer_state', payload, namespace=APP_NAMESPACE)
+
+
+def _timer_worker():
+    """Background thread: wait until end time (or cancel), then set temperature to RESET_TEMPERATURE."""
+    global _timer_end_timestamp
+    while True:
+        with _timer_lock:
+            end = _timer_end_timestamp
+            cancel_ev = _timer_cancel_event
+        if end is None or cancel_ev is None:
+            return
+        if cancel_ev.wait(timeout=1.0):
+            with _timer_lock:
+                _timer_end_timestamp = None
+            _emit_timer_state()
+            return
+        if time.time() >= end:
+            with _timer_lock:
+                _timer_end_timestamp = None
+            set_temperature(RESET_TEMPERATURE)
+            _emit_timer_state()
+            return
+
+
 # --- Flask Web UI with SocketIO ---
 flask_app = Flask(
     __name__,
@@ -149,6 +188,7 @@ class ControlNamespace(Namespace):
         sio.emit('motor_status',
                  {'message': "Connected to server"},
                  namespace=APP_NAMESPACE)
+        _emit_timer_state()
 
     def on_disconnect(self):
         print("Client disconnected")
@@ -200,6 +240,33 @@ class ControlNamespace(Namespace):
         temperature = int(data.get('temperature', 1))
         set_temperature(temperature)
         print(f"Setting temperature to {CURRENT_TEMPERATURE}")
+
+    def on_set_timer(self, data):
+        """Start a timer to reset temperature to RESET_TEMPERATURE after duration_minutes."""
+        global _timer_end_timestamp, _timer_cancel_event
+        duration_minutes = float(data.get('duration_minutes', 30))
+        duration_seconds = max(1, duration_minutes * 60)
+        with _timer_lock:
+            if _timer_cancel_event:
+                _timer_cancel_event.set()
+            _timer_cancel_event = threading.Event()
+            _timer_end_timestamp = time.time() + duration_seconds
+        threading.Thread(target=_timer_worker, daemon=True).start()
+        _emit_timer_state()
+        print(f"Timer set: reset to {RESET_TEMPERATURE}°F in {duration_minutes} min")
+
+    def on_force_reset(self, data):
+        """Reset temperature to RESET_TEMPERATURE now and cancel the timer."""
+        global _timer_end_timestamp, _timer_cancel_event
+        with _timer_lock:
+            ev = _timer_cancel_event
+            _timer_end_timestamp = None
+            _timer_cancel_event = None
+        if ev:
+            ev.set()
+        set_temperature(RESET_TEMPERATURE)
+        _emit_timer_state()
+        print("Force reset: temperature set to 108°F, timer cancelled")
 
 @flask_app.route("/")
 def index():
