@@ -1,0 +1,15 @@
+[project]
+name = "waterheater"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.2.1",
+    "rpi-lgpio>=0.6",
+    "rpimotorlib>=3.3",
+    "Flask>=2.0",
+    "python-socketio>=5.0",
+    "eventlet>=0.33",
+    "flask-socketio>=5.5.1",
+]
