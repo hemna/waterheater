@@ -30,9 +30,17 @@
                 console.log("Setting temperature to 97F");
                 socket.emit('set_temperature', {'temperature': 97});
             });
-            $("#highTemperature").click(function() {
+            $("#normalTemperature").click(function() {
                 console.log("Setting temperature to 108F");
                 socket.emit('set_temperature', {'temperature': 108});
+            });
+            $("#mediumTemperature").click(function() {
+                console.log("Setting temperature to 115F");
+                socket.emit('set_temperature', {'temperature': 115});
+            });
+            $("#highTemperature").click(function() {
+                console.log("Setting temperature to 120F");
+                socket.emit('set_temperature', {'temperature': 120});
             });
         });
     </script>
@@ -74,7 +82,9 @@
     <button id="increaseTemp" class="btn btn-danger">Increase Temperature</button>
     <br><br>
     <button id="lowTemperature" class="btn btn-outline-primary">Set to 97F</button>
-    <button id="highTemperature" class="btn btn-outline-danger">Set to 108F</button>
+    <button id="normalTemperature" class="btn btn-outline-success">Set to 108F</button>
+    <button id="hotTemperature" class="btn btn-outline-warning">Set to 115F</button>
+    <button id="highTemperature" class="btn btn-outline-danger">Set to 120F</button>
     <script>
         document.getElementById('motorForm').onsubmit = function(e) {
             e.preventDefault();
