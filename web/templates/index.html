@@ -19,24 +19,61 @@
             $("#currentTemperature").val(initialTemp);
             $("#tempDisplay").text(initialTemp);
 
+            var autoStartKey = "waterheater.autoStartTimer";
+            if (localStorage.getItem(autoStartKey) === "true") {
+                $("#autoStartTimer").prop("checked", true);
+            }
+            $("#autoStartTimer").on("change", function() {
+                localStorage.setItem(autoStartKey, $(this).is(":checked") ? "true" : "false");
+            });
+
+            var timerDurationKey = "waterheater.timerDuration";
+            var validDurations = ["1", "5", "15", "30", "60", "120"];
+            var savedDuration = localStorage.getItem(timerDurationKey);
+            if (savedDuration && validDurations.indexOf(savedDuration) !== -1) {
+                $("#timerDuration").val(savedDuration);
+            }
+            $("#timerDuration").on("change", function() {
+                localStorage.setItem(timerDurationKey, $(this).val());
+            });
+
+            function getTimerMinutes() {
+                return parseInt($("#timerDuration").val(), 10) || 15;
+            }
+            function maybeAutoStartTimer() {
+                if ($("#autoStartTimer").is(":checked")) {
+                    socket.emit('set_timer', {'duration_minutes': getTimerMinutes()});
+                }
+            }
             $("#increaseTemp").click(function() {
                 socket.emit('change_temperature', {'temperature': 1});
+                maybeAutoStartTimer();
             });
             $("#decreaseTemp").click(function() {
                 socket.emit('change_temperature', {'temperature': -1});
+                maybeAutoStartTimer();
             });
             $("#setTemperature").click(function() {
                 socket.emit('set_temperature_reading', {'temperature': $("#currentTemperature").val()});
             });
             $("#lowTemperature").click(function() {
                 socket.emit('set_temperature', {'temperature': 97});
+                maybeAutoStartTimer();
             });
             $("#highTemperature").click(function() {
                 socket.emit('set_temperature', {'temperature': 108});
+                maybeAutoStartTimer();
+            });
+            $("#temp110").click(function() {
+                socket.emit('set_temperature', {'temperature': 110});
+                maybeAutoStartTimer();
+            });
+            $("#temp120").click(function() {
+                socket.emit('set_temperature', {'temperature': 120});
+                maybeAutoStartTimer();
             });
             $("#startTimer").click(function() {
-                var minutes = parseInt($("#timerDuration").val(), 10) || 30;
-                socket.emit('set_timer', {'duration_minutes': minutes});
+                socket.emit('set_timer', {'duration_minutes': getTimerMinutes()});
             });
             $("#forceReset").click(function() {
                 socket.emit('force_reset', {});
@@ -74,6 +111,15 @@
                 <div class="temp-presets">
                     <button type="button" id="lowTemperature" class="btn btn-preset">97°F</button>
                     <button type="button" id="highTemperature" class="btn btn-preset btn-preset-high">108°F</button>
+                    <button type="button" id="temp110" class="btn btn-preset btn-preset-high">110°F</button>
+                    <button type="button" id="temp120" class="btn btn-preset btn-preset-high">120°F</button>
+                </div>
+                <div class="temp-auto mt-2">
+                    <label class="temp-auto-label">
+                        <input type="checkbox" id="autoStartTimer" class="temp-auto-checkbox">
+                        Auto-start timer when temperature is set
+                    </label>
+                    <span class="form-text temp-auto-hint">If a timer is already running, it will be reset.</span>
                 </div>
             </section>
 
@@ -84,8 +130,8 @@
                     <select id="timerDuration" class="form-select timer-select" aria-label="Reset after">
                         <option value="1">1 min</option>
                         <option value="5">5 min</option>
-                        <option value="15">15 min</option>
-                        <option value="30" selected>30 min</option>
+                        <option value="15" selected>15 min</option>
+                        <option value="30">30 min</option>
                         <option value="60">1 hr</option>
                         <option value="120">2 hr</option>
                     </select>

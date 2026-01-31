@@ -112,6 +112,7 @@ def change_temperature(degrees):
     sio.emit('temperature_status', {'message': f"Temperature changed to {CURRENT_TEMPERATURE} degrees"}, namespace=APP_NAMESPACE)
     sio.emit('temperature_update', {'temperature': CURRENT_TEMPERATURE}, namespace=APP_NAMESPACE)
 
+
 def set_temperature(temperature):
     global CURRENT_TEMPERATURE
     print(f"Setting temperature to {temperature}")
