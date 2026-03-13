@@ -37,6 +37,34 @@
                 localStorage.setItem(timerDurationKey, $(this).val());
             });
 
+            // Start timer localStorage
+            var startTimerDurationKey = "waterheater.startTimerDuration";
+            var savedStartDuration = localStorage.getItem(startTimerDurationKey);
+            if (savedStartDuration && validDurations.indexOf(savedStartDuration) !== -1) {
+                $("#startTimerDuration").val(savedStartDuration);
+            }
+            $("#startTimerDuration").on("change", function() {
+                localStorage.setItem(startTimerDurationKey, $(this).val());
+            });
+
+            var startTimerIntermediateTempKey = "waterheater.startTimerIntermediateTemp";
+            var savedIntermediateTemp = localStorage.getItem(startTimerIntermediateTempKey);
+            if (savedIntermediateTemp) {
+                $("#startTimerIntermediateTemp").val(savedIntermediateTemp);
+            }
+            $("#startTimerIntermediateTemp").on("change", function() {
+                localStorage.setItem(startTimerIntermediateTempKey, $(this).val());
+            });
+
+            var startTimerResetDurationKey = "waterheater.startTimerResetDuration";
+            var savedResetDuration = localStorage.getItem(startTimerResetDurationKey);
+            if (savedResetDuration && validDurations.indexOf(savedResetDuration) !== -1) {
+                $("#startTimerResetDuration").val(savedResetDuration);
+            }
+            $("#startTimerResetDuration").on("change", function() {
+                localStorage.setItem(startTimerResetDurationKey, $(this).val());
+            });
+
             function getTimerMinutes() {
                 return parseInt($("#timerDuration").val(), 10) || 15;
             }
@@ -77,6 +105,20 @@
             });
             $("#forceReset").click(function() {
                 socket.emit('force_reset', {});
+            });
+            // Start timer handlers
+            $("#startStartTimer").click(function() {
+                var duration = parseInt($("#startTimerDuration").val(), 10) || 15;
+                var intermediateTemp = parseInt($("#startTimerIntermediateTemp").val(), 10) || 106;
+                var resetDuration = parseInt($("#startTimerResetDuration").val(), 10) || 30;
+                socket.emit('set_start_timer', {
+                    'duration_minutes': duration,
+                    'intermediate_temperature': intermediateTemp,
+                    'reset_duration_minutes': resetDuration
+                });
+            });
+            $("#cancelStartTimer").click(function() {
+                socket.emit('cancel_start_timer', {});
             });
         });
     </script>
@@ -121,6 +163,41 @@
                     </label>
                     <span class="form-text temp-auto-hint">If a timer is already running, it will be reset.</span>
                 </div>
+            </section>
+
+            <section class="card card-timer">
+                <h2 class="card-title">Start timer</h2>
+                <p class="card-desc">Reduce temperature after a set time, then trigger reset timer.</p>
+                <div class="timer-set">
+                    <select id="startTimerDuration" class="form-select timer-select" aria-label="Start timer duration">
+                        <option value="1">1 min</option>
+                        <option value="5">5 min</option>
+                        <option value="15" selected>15 min</option>
+                        <option value="30">30 min</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hr</option>
+                    </select>
+                    <span class="timer-label">then reduce to</span>
+                    <input id="startTimerIntermediateTemp" class="form-control timer-temp-input" type="number" inputmode="numeric" min="90" max="130" value="106">
+                    <span class="timer-label">°F</span>
+                </div>
+                <div class="timer-set mt-2">
+                    <span class="timer-label">then reset timer for</span>
+                    <select id="startTimerResetDuration" class="form-select timer-select" aria-label="Reset timer duration">
+                        <option value="1">1 min</option>
+                        <option value="5">5 min</option>
+                        <option value="15">15 min</option>
+                        <option value="30" selected>30 min</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hr</option>
+                    </select>
+                    <span class="timer-label">to 108°F</span>
+                </div>
+                <div class="timer-actions mt-2">
+                    <button type="button" id="startStartTimer" class="btn btn-start">Start timer</button>
+                    <button type="button" id="cancelStartTimer" class="btn btn-force">Cancel</button>
+                </div>
+                <div id="startTimerCountdown" class="timer-countdown" role="status" aria-live="polite" hidden></div>
             </section>
 
             <section class="card card-timer">

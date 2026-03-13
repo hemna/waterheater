@@ -4,6 +4,11 @@ let timerCountdownInterval = null;
 let currentTimerEnd = null;
 let currentResetTemp = 108;
 
+let startTimerCountdownInterval = null;
+let currentStartTimerEnd = null;
+let currentIntermediateTemp = null;
+let currentResetDuration = null;
+
 function formatCountdown(secondsLeft) {
     if (secondsLeft <= 0) return '0:00';
     const m = Math.floor(secondsLeft / 60);
@@ -40,6 +45,36 @@ function updateTimerDisplay(endTimestamp, resetTemperature) {
     }
 }
 
+function updateStartTimerDisplay(endTimestamp, intermediateTemp, resetDuration) {
+    currentStartTimerEnd = endTimestamp || null;
+    if (intermediateTemp != null) currentIntermediateTemp = intermediateTemp;
+    if (resetDuration != null) currentResetDuration = resetDuration;
+    const el = document.getElementById('startTimerCountdown');
+    if (!currentStartTimerEnd) {
+        el.hidden = true;
+        if (startTimerCountdownInterval) {
+            clearInterval(startTimerCountdownInterval);
+            startTimerCountdownInterval = null;
+        }
+        return;
+    }
+    el.hidden = false;
+    function tick() {
+        if (!currentStartTimerEnd) return;
+        const now = Date.now() / 1000;
+        const left = Math.max(0, currentStartTimerEnd - now);
+        el.textContent = 'Reducing to ' + currentIntermediateTemp + '°F in ' + formatCountdown(left) + ' (then ' + currentResetDuration + ' min reset)';
+        if (left <= 0 && startTimerCountdownInterval) {
+            clearInterval(startTimerCountdownInterval);
+            startTimerCountdownInterval = null;
+        }
+    }
+    tick();
+    if (!startTimerCountdownInterval) {
+        startTimerCountdownInterval = setInterval(tick, 1000);
+    }
+}
+
 socket.on('connect', function() {
     console.log('Connected to server');
 });
@@ -63,4 +98,8 @@ socket.on('temperature_update', function(msg) {
 
 socket.on('timer_state', function(msg) {
     updateTimerDisplay(msg.end_timestamp || null, msg.reset_temperature);
+});
+
+socket.on('start_timer_state', function(msg) {
+    updateStartTimerDisplay(msg.end_timestamp || null, msg.intermediate_temperature, msg.reset_duration);
 });

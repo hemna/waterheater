@@ -25,17 +25,17 @@ import os
 # RPi and Motor Pre-allocations
 ################################
 #
-#define GPIO pins
-DEFAULT_STEPS_PER_DEGREE=14
-DEFAULT_INITIAL_TEMPERATURE=110
-CURRENT_TEMPERATURE=110
-APP_NAMESPACE = '/control'
+# define GPIO pins
+DEFAULT_STEPS_PER_DEGREE = 14
+DEFAULT_INITIAL_TEMPERATURE = 110
+CURRENT_TEMPERATURE = 110
+APP_NAMESPACE = "/control"
 
-direction= 22 # Direction (DIR) GPIO Pin
-step = 23 # Step GPIO Pin
-EN_pin = 24 # enable pin (LOW to enable)
+direction = 22  # Direction (DIR) GPIO Pin
+step = 23  # Step GPIO Pin
+EN_pin = 24  # enable pin (LOW to enable)
 
-TEMPERATURE_FILE = '/tmp/current_temperature.json'
+TEMPERATURE_FILE = "/tmp/current_temperature.json"
 
 RESET_TEMPERATURE = 108  # default temperature to reset to after timer
 WEB_PORT = 80
@@ -45,37 +45,52 @@ _timer_end_timestamp = None  # Unix time when reset will run, or None
 _timer_cancel_event = None  # threading.Event to cancel the active timer
 _timer_lock = threading.Lock()
 
+# Start timer state: reduce to intermediate temp, then trigger reset timer
+_start_timer_end_timestamp = None  # Unix time when start timer expires, or None
+_start_timer_cancel_event = None  # threading.Event to cancel the active start timer
+_start_timer_lock = threading.Lock()
+_start_timer_intermediate_temp = (
+    None  # Temperature to reduce to when start timer expires
+)
+_start_timer_reset_duration = (
+    None  # Duration (minutes) for the reset timer after start timer expires
+)
+
 ###########################
 # Actual motor control
 ###########################
 #
 
-def motor_control(steps, clockwise=True, steptype='Full'):
+
+def motor_control(steps, clockwise=True, steptype="Full"):
     """Clockwise to increase temperature."""
     print(f"Move motor {steps} clockwise? {clockwise} type {steptype}")
     # Declare a instance of class pass GPIO pins numbers and the motor type
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(EN_pin, GPIO.OUT) # set enable pin as output
-    GPIO.output(EN_pin,GPIO.LOW) # pull enable to low to enable motor
-    mymotortest = RpiMotorLib.A4988Nema(direction, step, (21,21,21), "DRV8825")
+    GPIO.setup(EN_pin, GPIO.OUT)  # set enable pin as output
+    GPIO.output(EN_pin, GPIO.LOW)  # pull enable to low to enable motor
+    mymotortest = RpiMotorLib.A4988Nema(direction, step, (21, 21, 21), "DRV8825")
     mymotortest.motor_go(
-            clockwise, # True=Clockwise, False=Counter-Clockwise
-            steptype, # Step type (Full,Half,1/4,1/8,1/16,1/32)
-            steps, # number of steps
-            #.0005, # step delay [sec]
-            .005, # step delay [sec]
-            True, # True = print verbose output
-            .05) # initial delay [sec]
-    GPIO.cleanup() # clear GPIO allocations after run
+        clockwise,  # True=Clockwise, False=Counter-Clockwise
+        steptype,  # Step type (Full,Half,1/4,1/8,1/16,1/32)
+        steps,  # number of steps
+        # .0005, # step delay [sec]
+        0.005,  # step delay [sec]
+        True,  # True = print verbose output
+        0.05,
+    )  # initial delay [sec]
+    GPIO.cleanup()  # clear GPIO allocations after run
 
 
 def load_temperature():
     global CURRENT_TEMPERATURE
     if os.path.exists(TEMPERATURE_FILE):
         try:
-            with open(TEMPERATURE_FILE, 'r') as f:
+            with open(TEMPERATURE_FILE, "r") as f:
                 data = json.load(f)
-                CURRENT_TEMPERATURE = data.get('current_temperature', CURRENT_TEMPERATURE)
+                CURRENT_TEMPERATURE = data.get(
+                    "current_temperature", CURRENT_TEMPERATURE
+                )
         except Exception as e:
             CURRENT_TEMPERATURE = DEFAULT_INITIAL_TEMPERATURE
             print(f"Error loading temperature: {e}.")
@@ -90,8 +105,8 @@ def save_temperature():
     global CURRENT_TEMPERATURE
     print(f"Saving Current temperature: {CURRENT_TEMPERATURE} to {TEMPERATURE_FILE}")
     try:
-        with open(TEMPERATURE_FILE, 'w') as f:
-            json.dump({'current_temperature': CURRENT_TEMPERATURE}, f)
+        with open(TEMPERATURE_FILE, "w") as f:
+            json.dump({"current_temperature": CURRENT_TEMPERATURE}, f)
     except Exception as e:
         print(f"Error saving temperature: {e}")
     print(f"Saved Current temperature: {CURRENT_TEMPERATURE} to {TEMPERATURE_FILE}")
@@ -102,15 +117,23 @@ def change_temperature(degrees):
     print(f"Changing temperature by {degrees} degrees")
     if degrees > 0:
         steps = int(degrees * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=False, steptype='Full')
+        motor_control(steps, clockwise=False, steptype="Full")
         CURRENT_TEMPERATURE += degrees
     else:
         steps = int(degrees * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(abs(steps), clockwise=True, steptype='Full')
+        motor_control(abs(steps), clockwise=True, steptype="Full")
         CURRENT_TEMPERATURE += degrees
     save_temperature()
-    sio.emit('temperature_status', {'message': f"Temperature changed to {CURRENT_TEMPERATURE} degrees"}, namespace=APP_NAMESPACE)
-    sio.emit('temperature_update', {'temperature': CURRENT_TEMPERATURE}, namespace=APP_NAMESPACE)
+    sio.emit(
+        "temperature_status",
+        {"message": f"Temperature changed to {CURRENT_TEMPERATURE} degrees"},
+        namespace=APP_NAMESPACE,
+    )
+    sio.emit(
+        "temperature_update",
+        {"temperature": CURRENT_TEMPERATURE},
+        namespace=APP_NAMESPACE,
+    )
 
 
 def set_temperature(temperature):
@@ -119,24 +142,82 @@ def set_temperature(temperature):
     diff = temperature - CURRENT_TEMPERATURE
     if diff > 0:
         steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=False, steptype='Full')
+        motor_control(steps, clockwise=False, steptype="Full")
     else:
         steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=True, steptype='Full')
+        motor_control(steps, clockwise=True, steptype="Full")
     CURRENT_TEMPERATURE = temperature
     save_temperature()
-    sio.emit('temperature_status', {'message': f"Temperature changed to {CURRENT_TEMPERATURE} degrees"}, namespace=APP_NAMESPACE)
-    sio.emit('temperature_update', {'temperature': CURRENT_TEMPERATURE}, namespace=APP_NAMESPACE)
+    sio.emit(
+        "temperature_status",
+        {"message": f"Temperature changed to {CURRENT_TEMPERATURE} degrees"},
+        namespace=APP_NAMESPACE,
+    )
+    sio.emit(
+        "temperature_update",
+        {"temperature": CURRENT_TEMPERATURE},
+        namespace=APP_NAMESPACE,
+    )
 
 
 def _emit_timer_state():
     """Broadcast current timer state so clients can show accurate countdown."""
     with _timer_lock:
         end = _timer_end_timestamp
-    payload = {'end_timestamp': end}
+    payload = {"end_timestamp": end}
     if end is not None:
-        payload['reset_temperature'] = RESET_TEMPERATURE
-    sio.emit('timer_state', payload, namespace=APP_NAMESPACE)
+        payload["reset_temperature"] = RESET_TEMPERATURE
+    sio.emit("timer_state", payload, namespace=APP_NAMESPACE)
+
+
+def _emit_start_timer_state():
+    """Broadcast current start timer state so clients can show accurate countdown."""
+    with _start_timer_lock:
+        end = _start_timer_end_timestamp
+        intermediate_temp = _start_timer_intermediate_temp
+        reset_duration = _start_timer_reset_duration
+    payload = {"end_timestamp": end}
+    if end is not None:
+        payload["intermediate_temperature"] = intermediate_temp
+        payload["reset_duration"] = reset_duration
+    sio.emit("start_timer_state", payload, namespace=APP_NAMESPACE)
+
+
+def _start_timer_worker():
+    """Background thread: wait until end time (or cancel), then reduce to intermediate temp and start reset timer."""
+    global _start_timer_end_timestamp, _timer_end_timestamp, _timer_cancel_event
+    while True:
+        with _start_timer_lock:
+            end = _start_timer_end_timestamp
+            cancel_ev = _start_timer_cancel_event
+            intermediate_temp = _start_timer_intermediate_temp
+            reset_duration = _start_timer_reset_duration
+        if end is None or cancel_ev is None:
+            return
+        if cancel_ev.wait(timeout=1.0):
+            with _start_timer_lock:
+                _start_timer_end_timestamp = None
+            _emit_start_timer_state()
+            return
+        if time.time() >= end:
+            with _start_timer_lock:
+                _start_timer_end_timestamp = None
+            # Reduce to intermediate temperature
+            set_temperature(intermediate_temp)
+            _emit_start_timer_state()
+            # Now start the reset timer
+            duration_seconds = max(1, reset_duration * 60)
+            with _timer_lock:
+                if _timer_cancel_event:
+                    _timer_cancel_event.set()
+                _timer_cancel_event = threading.Event()
+                _timer_end_timestamp = time.time() + duration_seconds
+            threading.Thread(target=_timer_worker, daemon=True).start()
+            _emit_timer_state()
+            print(
+                f"Start timer expired: set to {intermediate_temp}°F, reset timer started for {reset_duration} min"
+            )
+            return
 
 
 def _timer_worker():
@@ -164,19 +245,17 @@ def _timer_worker():
 # --- Flask Web UI with SocketIO ---
 flask_app = Flask(
     __name__,
-      static_url_path="/static",
-      static_folder="web/static",
-      template_folder="web/templates")
+    static_url_path="/static",
+    static_folder="web/static",
+    template_folder="web/templates",
+)
 
 
 def init_flask():
     global flask_app
     sio = SocketIO(
-        flask_app,
-        debug=True,
-        logger=True,
-        engineio_logger=True,
-        async_mode='threading')
+        flask_app, debug=True, logger=True, engineio_logger=True, async_mode="threading"
+    )
 
     sio.on_namespace(ControlNamespace(APP_NAMESPACE))
     return sio
@@ -186,10 +265,11 @@ class ControlNamespace(Namespace):
     def on_connect(self):
         global sio
         print("Client connected")
-        sio.emit('motor_status',
-                 {'message': "Connected to server"},
-                 namespace=APP_NAMESPACE)
+        sio.emit(
+            "motor_status", {"message": "Connected to server"}, namespace=APP_NAMESPACE
+        )
         _emit_timer_state()
+        _emit_start_timer_state()
 
     def on_disconnect(self):
         print("Client disconnected")
@@ -202,19 +282,28 @@ class ControlNamespace(Namespace):
         print(f"data.get('steps', 100): {data.get('steps', 100)}")
         print(f"data.get('steptype', 'Full'): {data.get('steptype', 'Full')}")
         print(f"data.get('clockwise', True): {data.get('clockwise', True)}")
-        steps = int(data.get('steps', 100))
-        steptype = data.get('steptype', 'Full')
-        clockwise = bool(data.get('clockwise', True))
+        steps = int(data.get("steps", 100))
+        steptype = data.get("steptype", "Full")
+        clockwise = bool(data.get("clockwise", True))
         print(f"Moving motor {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}")
-        #threading.Thread(target=motor_control, args=(steps, clockwise, steptype)).start()
+        # threading.Thread(target=motor_control, args=(steps, clockwise, steptype)).start()
         motor_control(steps, clockwise=clockwise, steptype=steptype)
-        sio.emit('motor_status', {'message': f"Motor moving {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}"})
+        sio.emit(
+            "motor_status",
+            {
+                "message": f"Motor moving {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}"
+            },
+        )
 
     def on_change_temperature(self, data):
         print(f"on_change_temperature: {data}")
-        temperature = int(data.get('temperature', 1))
+        temperature = int(data.get("temperature", 1))
         change_temperature(temperature)
-        sio.emit('temperature_status', {'message': f"Temperature changed to {temperature} degrees"}, namespace=APP_NAMESPACE)
+        sio.emit(
+            "temperature_status",
+            {"message": f"Temperature changed to {temperature} degrees"},
+            namespace=APP_NAMESPACE,
+        )
 
     def on_set_temperature_reading(self, data):
         """Set the current temperature reading from the heater.
@@ -226,26 +315,26 @@ class ControlNamespace(Namespace):
         """
         global CURRENT_TEMPERATURE
         print(f"on_set_temperature_reading: {data}")
-        temperature = int(data.get('temperature', 1))
+        temperature = int(data.get("temperature", 1))
         CURRENT_TEMPERATURE = temperature
         save_temperature()
         print(f"Setting temperature to {CURRENT_TEMPERATURE}")
-        sio.emit('temperature_update',
-                 {'temperature': temperature},
-                 namespace=APP_NAMESPACE)
+        sio.emit(
+            "temperature_update", {"temperature": temperature}, namespace=APP_NAMESPACE
+        )
 
     def on_set_temperature(self, data):
         """User wants to set the temperature setting to this exact value."""
         global CURRENT_TEMPERATURE
         print(f"on_set_temperature: {data}")
-        temperature = int(data.get('temperature', 1))
+        temperature = int(data.get("temperature", 1))
         set_temperature(temperature)
         print(f"Setting temperature to {CURRENT_TEMPERATURE}")
 
     def on_set_timer(self, data):
         """Start a timer to reset temperature to RESET_TEMPERATURE after duration_minutes."""
         global _timer_end_timestamp, _timer_cancel_event
-        duration_minutes = float(data.get('duration_minutes', 30))
+        duration_minutes = float(data.get("duration_minutes", 30))
         duration_seconds = max(1, duration_minutes * 60)
         with _timer_lock:
             if _timer_cancel_event:
@@ -269,23 +358,56 @@ class ControlNamespace(Namespace):
         _emit_timer_state()
         print("Force reset: temperature set to 108°F, timer cancelled")
 
+    def on_set_start_timer(self, data):
+        """Start a start timer: after duration_minutes, reduce to intermediate_temperature, then start reset timer."""
+        global _start_timer_end_timestamp, _start_timer_cancel_event
+        global _start_timer_intermediate_temp, _start_timer_reset_duration
+        duration_minutes = float(data.get("duration_minutes", 15))
+        intermediate_temp = int(data.get("intermediate_temperature", 106))
+        reset_duration = float(data.get("reset_duration_minutes", 30))
+        duration_seconds = max(1, duration_minutes * 60)
+        with _start_timer_lock:
+            if _start_timer_cancel_event:
+                _start_timer_cancel_event.set()
+            _start_timer_cancel_event = threading.Event()
+            _start_timer_end_timestamp = time.time() + duration_seconds
+            _start_timer_intermediate_temp = intermediate_temp
+            _start_timer_reset_duration = reset_duration
+        threading.Thread(target=_start_timer_worker, daemon=True).start()
+        _emit_start_timer_state()
+        print(
+            f"Start timer set: {duration_minutes} min -> {intermediate_temp}°F -> {reset_duration} min reset timer"
+        )
+
+    def on_cancel_start_timer(self, data):
+        """Cancel the start timer without affecting the reset timer."""
+        global _start_timer_end_timestamp, _start_timer_cancel_event
+        with _start_timer_lock:
+            ev = _start_timer_cancel_event
+            _start_timer_end_timestamp = None
+            _start_timer_cancel_event = None
+        if ev:
+            ev.set()
+        _emit_start_timer_state()
+        print("Start timer cancelled")
+
+
 @flask_app.route("/")
 def index():
     global CURRENT_TEMPERATURE
     print(f"Index page requested, current temperature: {CURRENT_TEMPERATURE}")
-    return render_template('index.html', initial_temperature=CURRENT_TEMPERATURE)
+    return render_template("index.html", initial_temperature=CURRENT_TEMPERATURE)
 
 
 @click.command()
-@click.option('--steps', default=100, help='Number of steps.')
-@click.option('--steptype',
-              type=click.Choice(['Full', '1/2', '1/4', '1/8', '1/16', '1/32']),
-              default="Full",
-              help="Step Type")
-@click.option('--clockwise',
-              type=click.BOOL,
-              default=True,
-              help='Rotate clockwise?.')
+@click.option("--steps", default=100, help="Number of steps.")
+@click.option(
+    "--steptype",
+    type=click.Choice(["Full", "1/2", "1/4", "1/8", "1/16", "1/32"]),
+    default="Full",
+    help="Step Type",
+)
+@click.option("--clockwise", type=click.BOOL, default=True, help="Rotate clockwise?.")
 def main(steps, steptype, clockwise):
     print("Hello from waterheater!")
     motor_control(steps, clockwise=clockwise, steptype=steptype)
@@ -293,8 +415,9 @@ def main(steps, steptype, clockwise):
 
 if __name__ == "__main__":
     import sys
+
     load_temperature()
-    if len(sys.argv) > 1 and sys.argv[1].startswith('--'):
+    if len(sys.argv) > 1 and sys.argv[1].startswith("--"):
         main()
     else:
         print("init_flask()")
@@ -303,7 +426,7 @@ if __name__ == "__main__":
         sio.run(
             flask_app,
             debug=True,
-            host='0.0.0.0',
+            host="0.0.0.0",
             port=WEB_PORT,
             allow_unsafe_werkzeug=True,
         )
