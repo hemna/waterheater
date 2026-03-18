@@ -1,0 +1,20 @@
+{#def
+    label: str = "",
+    className: str = "",
+    checked: bool = False,
+    disabled: bool = False
+#}
+<div
+    {{ attrs.render() }}
+>
+  <input
+      type="checkbox"
+      id="{{ attrs.get('id', '') }}"
+      class="{{ className }} text-black accent-black rounded border-zinc-200 dark:border-zinc-50 focus:ring-2 focus:ring-offset-2 focus:ring-black dark:focus:ring-white dark:focus:ring-2 dark:focus:ring-offset-2"
+      {% if checked %}checked{% endif %}
+      {% if disabled %}disabled{% endif %}
+  />
+  {% if label %}
+    <label for="{{ attrs.get('id', '') }}" class="ml-2 text-sm">{{ label }}</label>
+  {% endif %}
+</div>

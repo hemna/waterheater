@@ -1,0 +1,14 @@
+{#def
+    name: str = "select",
+#}
+<div
+    x-data="{ open: false, selectedValue: '', selectedLabel: '' }"
+>
+  <input
+      type="hidden"
+      name="{{ name }}"
+      :value="selectedValue"
+      {{ attrs.render() }}
+  />
+  {{ content }}
+</div>

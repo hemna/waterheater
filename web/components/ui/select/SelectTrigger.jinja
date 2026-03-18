@@ -1,0 +1,11 @@
+{#def className: str = "" #}
+<div class="relative">
+<button id="selectTrigger"
+    @click="open = !open"
+    class="flex h-10 w-full items-center justify-between rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm ring-offset-white focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:ring-offset-zinc-950 placeholder:text-muted-foreground {{ className }}"
+    {{ attrs.render() }}
+>
+  {{ content }}
+  <ChevronDownIcon className="h-4 w-4 opacity-50" />
+</button>
+</div>

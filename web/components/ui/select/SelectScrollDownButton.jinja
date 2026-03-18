@@ -1,0 +1,13 @@
+<div
+    x-show="canScrollDown"
+    @mouseenter="
+        scrollInterval = setInterval(() => {
+            $refs.viewport.scrollBy({ top: 40, behavior: 'smooth' });
+            checkScroll();
+        }, 30);
+    "
+    @mouseleave="clearInterval(scrollInterval)"
+    class="flex items-center justify-center py-1 cursor-pointer"
+>
+  <ChevronDownIcon class="h-4 w-4" />
+</div>
