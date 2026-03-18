@@ -20,6 +20,9 @@ from flask import request
 from flask_socketio import SocketIO, Namespace
 import json
 import os
+import jinjax
+from basic_components.utils.jinjax import setup_component_catalog
+from basic_components.utils.tailwind import tw
 
 ################################
 # RPi and Motor Pre-allocations
@@ -249,6 +252,16 @@ flask_app = Flask(
     static_folder="web/static",
     template_folder="web/templates",
 )
+
+# --- JinjaX Setup ---
+# Add JinjaX extension to Flask's Jinja environment
+flask_app.jinja_env.add_extension(jinjax.JinjaX)
+# Create catalog and register component directories
+catalog = jinjax.Catalog(jinja_env=flask_app.jinja_env)
+catalog.add_folder("web/components")
+setup_component_catalog(catalog, components_dir="web/components")
+# Add cn (tailwind class merge) utility to Jinja globals
+flask_app.jinja_env.globals["cn"] = tw
 
 
 def init_flask():
