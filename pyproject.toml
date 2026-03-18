@@ -16,6 +16,8 @@ dependencies = [
     "python-socketio>=5.0",
     "eventlet>=0.33",
     "flask-socketio>=5.5.1",
+    "jinjax>=0.47",
+    "basic-components[utils]>=0.1.0",
 ]
 
 [tool.setuptools]

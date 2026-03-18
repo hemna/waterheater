@@ -1,0 +1,15 @@
+{
+  "name": "waterheater-ui",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "npx tailwindcss -i ./web/static/src/input.css -o ./web/static/dist/output.css",
+    "build-prod": "npx tailwindcss -i ./web/static/src/input.css -o ./web/static/dist/output.css --minify",
+    "watch": "npx tailwindcss -i ./web/static/src/input.css -o ./web/static/dist/output.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.7",
+    "tailwind-merge": "^2.5.3",
+    "tailwindcss": "^3.4.10",
+    "tailwindcss-animate": "^1.0.7"
+  }
+}
