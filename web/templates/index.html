@@ -6,220 +6,228 @@
     <title>Water Heater Control</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind compiled CSS -->
+    <link href="/static/dist/output.css" rel="stylesheet">
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    <!-- Socket.IO -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/main.css" rel="stylesheet">
+    <!-- App JS (Alpine store + Socket.IO) - must load before Alpine -->
     <script src="/static/main.js"></script>
-    <script>
-        $(document).ready(function() {
-            var initialTemp = parseInt('{{ initial_temperature|safe }}', 10) || 108;
-            $("#currentTemperature").val(initialTemp);
-            $("#tempDisplay").text(initialTemp);
-
-            var autoStartKey = "waterheater.autoStartTimer";
-            if (localStorage.getItem(autoStartKey) === "true") {
-                $("#autoStartTimer").prop("checked", true);
-            }
-            $("#autoStartTimer").on("change", function() {
-                localStorage.setItem(autoStartKey, $(this).is(":checked") ? "true" : "false");
-            });
-
-            var timerDurationKey = "waterheater.timerDuration";
-            var validDurations = ["1", "5", "15", "30", "60", "120"];
-            var savedDuration = localStorage.getItem(timerDurationKey);
-            if (savedDuration && validDurations.indexOf(savedDuration) !== -1) {
-                $("#timerDuration").val(savedDuration);
-            }
-            $("#timerDuration").on("change", function() {
-                localStorage.setItem(timerDurationKey, $(this).val());
-            });
-
-            // Start timer localStorage
-            var startTimerDurationKey = "waterheater.startTimerDuration";
-            var savedStartDuration = localStorage.getItem(startTimerDurationKey);
-            if (savedStartDuration && validDurations.indexOf(savedStartDuration) !== -1) {
-                $("#startTimerDuration").val(savedStartDuration);
-            }
-            $("#startTimerDuration").on("change", function() {
-                localStorage.setItem(startTimerDurationKey, $(this).val());
-            });
-
-            var startTimerIntermediateTempKey = "waterheater.startTimerIntermediateTemp";
-            var savedIntermediateTemp = localStorage.getItem(startTimerIntermediateTempKey);
-            if (savedIntermediateTemp) {
-                $("#startTimerIntermediateTemp").val(savedIntermediateTemp);
-            }
-            $("#startTimerIntermediateTemp").on("change", function() {
-                localStorage.setItem(startTimerIntermediateTempKey, $(this).val());
-            });
-
-            var startTimerResetDurationKey = "waterheater.startTimerResetDuration";
-            var savedResetDuration = localStorage.getItem(startTimerResetDurationKey);
-            if (savedResetDuration && validDurations.indexOf(savedResetDuration) !== -1) {
-                $("#startTimerResetDuration").val(savedResetDuration);
-            }
-            $("#startTimerResetDuration").on("change", function() {
-                localStorage.setItem(startTimerResetDurationKey, $(this).val());
-            });
-
-            function getTimerMinutes() {
-                return parseInt($("#timerDuration").val(), 10) || 15;
-            }
-            function maybeAutoStartTimer() {
-                if ($("#autoStartTimer").is(":checked")) {
-                    socket.emit('set_timer', {'duration_minutes': getTimerMinutes()});
-                }
-            }
-            $("#increaseTemp").click(function() {
-                socket.emit('change_temperature', {'temperature': 1});
-                maybeAutoStartTimer();
-            });
-            $("#decreaseTemp").click(function() {
-                socket.emit('change_temperature', {'temperature': -1});
-                maybeAutoStartTimer();
-            });
-            $("#setTemperature").click(function() {
-                socket.emit('set_temperature_reading', {'temperature': $("#currentTemperature").val()});
-            });
-            $("#lowTemperature").click(function() {
-                socket.emit('set_temperature', {'temperature': 97});
-                maybeAutoStartTimer();
-            });
-            $("#highTemperature").click(function() {
-                socket.emit('set_temperature', {'temperature': 108});
-                maybeAutoStartTimer();
-            });
-            $("#temp110").click(function() {
-                socket.emit('set_temperature', {'temperature': 110});
-                maybeAutoStartTimer();
-            });
-            $("#temp120").click(function() {
-                socket.emit('set_temperature', {'temperature': 120});
-                maybeAutoStartTimer();
-            });
-            $("#startTimer").click(function() {
-                socket.emit('set_timer', {'duration_minutes': getTimerMinutes()});
-            });
-            $("#forceReset").click(function() {
-                socket.emit('force_reset', {});
-            });
-            // Start timer handlers
-            $("#startStartTimer").click(function() {
-                var duration = parseInt($("#startTimerDuration").val(), 10) || 15;
-                var intermediateTemp = parseInt($("#startTimerIntermediateTemp").val(), 10) || 106;
-                var resetDuration = parseInt($("#startTimerResetDuration").val(), 10) || 30;
-                socket.emit('set_start_timer', {
-                    'duration_minutes': duration,
-                    'intermediate_temperature': intermediateTemp,
-                    'reset_duration_minutes': resetDuration
-                });
-            });
-            $("#cancelStartTimer").click(function() {
-                socket.emit('cancel_start_timer', {});
-            });
-        });
-    </script>
 </head>
-<body>
-    <div class="app">
-        <header class="app-header">
-            <h1 class="app-title">Water Heater</h1>
-            <p class="app-subtitle">Temperature & timer control</p>
+<body class="min-h-screen bg-zinc-50" style="font-family: 'Inter', sans-serif;" x-data x-init="
+    $store.heater.temperature = parseInt('{{ initial_temperature|default(108) }}', 10);
+">
+    <div class="max-w-md mx-auto p-6 space-y-5">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-2xl font-bold text-zinc-900 tracking-tight">Water Heater</h1>
+            <p class="text-sm text-zinc-500">Temperature & timer control</p>
         </header>
 
-        <main class="app-main">
-            <section class="card card-temp">
-                <h2 class="card-title">Temperature</h2>
-                <div class="temp-hero">
-                    <span id="tempDisplay" class="temp-value">—</span>
-                    <span class="temp-unit">°F</span>
+        <!-- Temperature Card -->
+        <Card>
+            <CardHeader>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Temperature</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+                <!-- Temperature Display -->
+                <div class="flex items-baseline justify-center gap-1">
+                    <span class="text-6xl font-bold tracking-tight text-zinc-900" x-text="$store.heater.temperature">108</span>
+                    <span class="text-2xl font-medium text-zinc-400">°F</span>
                 </div>
-                <div class="temp-actions">
-                    <button type="button" id="decreaseTemp" class="btn btn-ctrl btn-ctrl-down" aria-label="Decrease temperature">
-                        <span class="btn-ctrl-icon">−</span>
-                    </button>
-                    <button type="button" id="increaseTemp" class="btn btn-ctrl btn-ctrl-up" aria-label="Increase temperature">
-                        <span class="btn-ctrl-icon">+</span>
-                    </button>
-                </div>
-                <div class="temp-sync">
-                    <label for="currentTemperature" class="visually-hidden">Current reading on heater</label>
-                    <input id="currentTemperature" class="input-sync" type="number" inputmode="numeric" min="90" max="130" value="108">
-                    <button type="button" id="setTemperature" class="btn btn-sync">Sync reading</button>
-                </div>
-                <div class="temp-presets">
-                    <button type="button" id="lowTemperature" class="btn btn-preset">97°F</button>
-                    <button type="button" id="highTemperature" class="btn btn-preset btn-preset-high">108°F</button>
-                    <button type="button" id="temp110" class="btn btn-preset btn-preset-high">110°F</button>
-                    <button type="button" id="temp120" class="btn btn-preset btn-preset-high">120°F</button>
-                </div>
-                <div class="temp-auto mt-2">
-                    <label class="temp-auto-label">
-                        <input type="checkbox" id="autoStartTimer" class="temp-auto-checkbox">
-                        Auto-start timer when temperature is set
-                    </label>
-                    <span class="form-text temp-auto-hint">If a timer is already running, it will be reset.</span>
-                </div>
-            </section>
 
-            <section class="card card-timer">
-                <h2 class="card-title">Start timer</h2>
-                <p class="card-desc">Reduce temperature after a set time, then trigger reset timer.</p>
-                <div class="timer-set">
-                    <select id="startTimerDuration" class="form-select timer-select" aria-label="Start timer duration">
-                        <option value="1">1 min</option>
-                        <option value="5">5 min</option>
-                        <option value="15" selected>15 min</option>
-                        <option value="30">30 min</option>
-                        <option value="60">1 hr</option>
-                        <option value="120">2 hr</option>
-                    </select>
-                    <span class="timer-label">then reduce to</span>
-                    <input id="startTimerIntermediateTemp" class="form-control timer-temp-input" type="number" inputmode="numeric" min="90" max="130" value="106">
-                    <span class="timer-label">°F</span>
+                <!-- +/- Controls -->
+                <div class="flex justify-center gap-4">
+                    <Button 
+                        variant="outline" 
+                        size="icon"
+                        className="w-14 h-14 rounded-full text-2xl"
+                        @click="$store.heater.decreaseTemp()"
+                    >−</Button>
+                    <Button 
+                        variant="outline" 
+                        size="icon"
+                        className="w-14 h-14 rounded-full text-2xl"
+                        @click="$store.heater.increaseTemp()"
+                    >+</Button>
                 </div>
-                <div class="timer-set mt-2">
-                    <span class="timer-label">then reset timer for</span>
-                    <select id="startTimerResetDuration" class="form-select timer-select" aria-label="Reset timer duration">
+
+                <!-- Sync Reading -->
+                <div class="flex items-center gap-2">
+                    <input 
+                        type="number" 
+                        x-model="$store.heater.temperature"
+                        min="90" 
+                        max="130"
+                        class="w-20 text-center flex h-10 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950"
+                    />
+                    <Button 
+                        variant="outline" 
+                        size="sm"
+                        @click="$store.heater.syncReading($store.heater.temperature)"
+                    >Sync reading</Button>
+                </div>
+
+                <!-- Preset Buttons -->
+                <div class="flex gap-2">
+                    <Button variant="outline" className="flex-1" @click="$store.heater.setPreset(97)">97°F</Button>
+                    <Button variant="outline" className="flex-1 text-orange-600 border-orange-300 hover:bg-orange-50" @click="$store.heater.setPreset(108)">108°F</Button>
+                    <Button variant="outline" className="flex-1 text-orange-600 border-orange-300 hover:bg-orange-50" @click="$store.heater.setPreset(110)">110°F</Button>
+                    <Button variant="outline" className="flex-1 text-orange-600 border-orange-300 hover:bg-orange-50" @click="$store.heater.setPreset(120)">120°F</Button>
+                </div>
+
+                <!-- Auto-start Timer Checkbox -->
+                <div class="space-y-1" x-data="{ autoStart: localStorage.getItem('waterheater.autoStartTimer') === 'true' }">
+                    <div class="flex items-center gap-2">
+                        <input 
+                            type="checkbox"
+                            id="autoStartTimer"
+                            x-model="autoStart"
+                            @change="localStorage.setItem('waterheater.autoStartTimer', autoStart ? 'true' : 'false')"
+                            class="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                        />
+                        <Label htmlFor="autoStartTimer">Auto-start timer when temperature is set</Label>
+                    </div>
+                    <p class="text-xs text-zinc-500 ml-6">If a timer is already running, it will be reset.</p>
+                </div>
+            </CardContent>
+        </Card>
+
+        <!-- Start Timer Card -->
+        <Card x-data="{
+            duration: localStorage.getItem('waterheater.startTimerDuration') || '15',
+            intermediateTemp: localStorage.getItem('waterheater.startTimerIntermediateTemp') || '106',
+            resetDuration: localStorage.getItem('waterheater.startTimerResetDuration') || '30'
+        }">
+            <CardHeader>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Start Timer</CardTitle>
+                <CardDescription>Reduce temperature after a set time, then trigger reset timer.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <!-- Duration + Intermediate Temp -->
+                <div class="flex items-center gap-2 flex-wrap">
+                    <select 
+                        x-model="duration"
+                        @change="localStorage.setItem('waterheater.startTimerDuration', duration)"
+                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950"
+                    >
                         <option value="1">1 min</option>
                         <option value="5">5 min</option>
                         <option value="15">15 min</option>
-                        <option value="30" selected>30 min</option>
-                        <option value="60">1 hr</option>
-                        <option value="120">2 hr</option>
-                    </select>
-                    <span class="timer-label">to 108°F</span>
-                </div>
-                <div class="timer-actions mt-2">
-                    <button type="button" id="startStartTimer" class="btn btn-start">Start timer</button>
-                    <button type="button" id="cancelStartTimer" class="btn btn-force">Cancel</button>
-                </div>
-                <div id="startTimerCountdown" class="timer-countdown" role="status" aria-live="polite" hidden></div>
-            </section>
-
-            <section class="card card-timer">
-                <h2 class="card-title">Reset timer</h2>
-                <p class="card-desc">Return to 108°F after a set time.</p>
-                <div class="timer-set">
-                    <select id="timerDuration" class="form-select timer-select" aria-label="Reset after">
-                        <option value="1">1 min</option>
-                        <option value="5">5 min</option>
-                        <option value="15" selected>15 min</option>
                         <option value="30">30 min</option>
                         <option value="60">1 hr</option>
                         <option value="120">2 hr</option>
                     </select>
-                    <button type="button" id="startTimer" class="btn btn-start">Start timer</button>
+                    <span class="text-sm text-zinc-500">then reduce to</span>
+                    <input 
+                        type="number" 
+                        x-model="intermediateTemp"
+                        @change="localStorage.setItem('waterheater.startTimerIntermediateTemp', intermediateTemp)"
+                        min="90" 
+                        max="130"
+                        class="w-16 text-center rounded-md border border-zinc-200 bg-white px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950"
+                    />
+                    <span class="text-sm text-zinc-500">°F</span>
                 </div>
-                <div id="timerCountdown" class="timer-countdown" role="status" aria-live="polite" hidden></div>
-                <button type="button" id="forceReset" class="btn btn-force">Force reset to 108°F</button>
-            </section>
 
-            <div id="result" class="status" role="status" aria-live="polite"></div>
-        </main>
+                <!-- Reset Duration -->
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="text-sm text-zinc-500">then reset timer for</span>
+                    <select 
+                        x-model="resetDuration"
+                        @change="localStorage.setItem('waterheater.startTimerResetDuration', resetDuration)"
+                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950"
+                    >
+                        <option value="1">1 min</option>
+                        <option value="5">5 min</option>
+                        <option value="15">15 min</option>
+                        <option value="30">30 min</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hr</option>
+                    </select>
+                    <span class="text-sm text-zinc-500">to 108°F</span>
+                </div>
+
+                <!-- Buttons -->
+                <div class="flex gap-2">
+                    <Button 
+                        @click="$store.heater.startStartTimer(duration, intermediateTemp, resetDuration)"
+                    >Start timer</Button>
+                    <Button 
+                        variant="outline"
+                        @click="$store.heater.cancelStartTimer()"
+                    >Cancel</Button>
+                </div>
+
+                <!-- Countdown Display -->
+                <div 
+                    x-show="$store.heater.startTimerEnd"
+                    x-cloak
+                    class="p-3 rounded-md bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium"
+                >
+                    Reducing to <span x-text="$store.heater.intermediateTemp"></span>°F in 
+                    <span x-text="$store.heater.startTimerCountdown()"></span>
+                    (then <span x-text="$store.heater.resetDuration"></span> min reset)
+                </div>
+            </CardContent>
+        </Card>
+
+        <!-- Reset Timer Card -->
+        <Card x-data="{ duration: localStorage.getItem('waterheater.timerDuration') || '15' }">
+            <CardHeader>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Reset Timer</CardTitle>
+                <CardDescription>Return to 108°F after a set time.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+                <!-- Duration + Start Button -->
+                <div class="flex items-center gap-2">
+                    <select 
+                        x-model="duration"
+                        @change="localStorage.setItem('waterheater.timerDuration', duration)"
+                        class="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950"
+                    >
+                        <option value="1">1 min</option>
+                        <option value="5">5 min</option>
+                        <option value="15">15 min</option>
+                        <option value="30">30 min</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hr</option>
+                    </select>
+                    <Button @click="$store.heater.startResetTimer(duration)">Start timer</Button>
+                </div>
+
+                <!-- Countdown Display -->
+                <div 
+                    x-show="$store.heater.timerEnd"
+                    x-cloak
+                    class="p-3 rounded-md bg-orange-50 border border-orange-200 text-orange-700 text-sm font-medium"
+                >
+                    Resetting to <span x-text="$store.heater.resetTemp"></span>°F in 
+                    <span x-text="$store.heater.timerCountdown()"></span>
+                </div>
+
+                <!-- Force Reset Button -->
+                <Button 
+                    variant="ghost"
+                    className="text-zinc-500 hover:text-red-600"
+                    @click="$store.heater.forceReset()"
+                >Force reset to 108°F</Button>
+            </CardContent>
+        </Card>
+
+        <!-- Status Message -->
+        <div 
+            x-show="$store.heater.statusMessage"
+            x-text="$store.heater.statusMessage"
+            x-cloak
+            class="text-center text-sm text-zinc-500 p-3 bg-white rounded-md border border-zinc-200 shadow-sm"
+        ></div>
     </div>
+
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
 </body>
 </html>
