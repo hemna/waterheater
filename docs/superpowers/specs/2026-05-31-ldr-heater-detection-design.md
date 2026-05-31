@@ -11,7 +11,7 @@ Add a photoresistor (LDR) sensor to detect when the water heater burner is on. S
 
 - **Sensor:** WWZMDiB 5MM LDR 5516 Photoresistor + LM393 comparator module (6-pack)
 - **Output used:** Digital output (DO pin) — LOW when light detected, HIGH when dark
-- **GPIO pin:** Configurable constant `LDR_GPIO_PIN` (exact pin TBD when hardware arrives)
+- **GPIO pin:** Configurable constant `LDR_GPIO_PIN` (set to placeholder `25`; must be updated to the correct pin before deployment — the implementation plan includes this as an explicit step)
 - **Power:** 3.3V or 5V from Raspberry Pi header
 
 ## Architecture
@@ -66,12 +66,13 @@ Started at app startup (daemon thread). Every `LDR_POLL_INTERVAL` seconds:
    - **OFF → ON transition:**
      - Set `_heater_on = True`
      - Emit `heater_state {on: true}` to all clients
-     - If `_ldr_auto_timer_enabled`: start `_ldr_timer_worker` thread
+     - If `_ldr_auto_timer_enabled` and no timer is already running: start `_ldr_timer_worker` thread (duplicate ON signals from LDR flicker are ignored if a timer is already active)
    - **ON → OFF transition:**
      - Set `_heater_on = False`
      - Emit `heater_state {on: false}` to all clients
-     - Cancel LDR timer if running
+     - Cancel LDR timer if running (heater turned off before 15 min)
      - If `_ldr_saved_temp` is not None: call `set_temperature(_ldr_saved_temp)`, clear `_ldr_saved_temp`
+     - If `_ldr_saved_temp` is None: no temperature restore needed (timer hadn't fired yet)
 
 ### `_ldr_timer_worker`
 
@@ -79,9 +80,11 @@ Background thread started when heater turns on (auto-timer enabled):
 
 1. Wait `LDR_AUTO_TIMER_MINUTES` × 60 seconds (cancellable via `_ldr_timer_cancel_event`)
 2. If timer completes (not cancelled):
-   - Save `CURRENT_TEMPERATURE` → `_ldr_saved_temp`
+   - Save `CURRENT_TEMPERATURE` (existing module-level global in `main.py`, updated by all temperature-change operations) → `_ldr_saved_temp`
    - Call `set_temperature(LDR_REDUCED_TEMP)` (97°F)
 3. If cancelled (heater turned off before timer fired): do nothing
+
+`set_temperature` is an existing function in `main.py` that moves the stepper motor to the target position, updates `CURRENT_TEMPERATURE`, saves it to disk, and emits a `temperature_update` Socket.IO event.
 
 ### Persistence
 
@@ -89,7 +92,7 @@ Background thread started when heater turns on (auto-timer enabled):
 ```json
 {"auto_timer_enabled": false}
 ```
-Loaded at startup, written on each `set_ldr_auto_timer` event.
+Loaded at startup, written on each `set_ldr_auto_timer` event. Using `/tmp` is intentional — same pattern as the existing `TEMPERATURE_FILE` (`/tmp/current_temperature.json`). The preference is ephemeral and resets to `false` on reboot, which is acceptable for this use case.
 
 ### New Socket.IO events
 
@@ -98,7 +101,12 @@ Loaded at startup, written on each `set_ldr_auto_timer` event.
 | server → client | `heater_state` | `{on: bool}` | Emitted on state change and on client connect |
 | client → server | `set_ldr_auto_timer` | `{enabled: bool}` | Enable/disable auto-timer; persisted to file |
 
-The `on_connect` handler gains a call to `_emit_heater_state()` alongside existing timer state emits.
+The `on_connect` handler gains a call to `_emit_heater_state()` alongside existing timer state emits. `_emit_heater_state()` also sends `ldr_auto_timer_enabled` so the checkbox renders correctly on page load:
+
+```python
+# emitted on connect and on state change
+{"on": bool, "auto_timer_enabled": bool}
+```
 
 ## Frontend
 
@@ -136,7 +144,7 @@ Below the indicator, inside the same card:
 
 - Handle `heater_state` event: toggle indicator class and label text
 - On page load (connect): server sends current heater state — JS applies it immediately
-- Checkbox `change` listener: emit `set_ldr_auto_timer`
+- Checkbox `change` listener: emit `set_ldr_auto_timer`. If the user disables the auto-timer while a countdown is already running, the server cancels the active timer (but does not restore temperature, since temp hasn't been reduced yet).
 
 ## State machine summary
 
