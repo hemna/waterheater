@@ -35,6 +35,17 @@ direction = 22  # Direction (DIR) GPIO Pin
 step = 23  # Step GPIO Pin
 EN_pin = 24  # enable pin (LOW to enable)
 
+# LDR sensor (photoresistor) GPIO config
+# DO pin goes LOW when light detected (heater burner on)
+# Update LDR_GPIO_PIN to the correct pin once hardware is wired
+LDR_GPIO_PIN = 25
+LDR_HEATER_ON_LEVEL = 0        # GPIO.LOW — DO goes LOW when light detected
+LDR_POLL_INTERVAL = 0.25       # seconds between GPIO reads
+LDR_DEBOUNCE_SAMPLES = 3       # consecutive matching reads to confirm state change
+LDR_AUTO_TIMER_MINUTES = 15
+LDR_REDUCED_TEMP = 97
+LDR_SETTINGS_FILE = "/tmp/ldr_settings.json"
+
 TEMPERATURE_FILE = "/tmp/current_temperature.json"
 
 RESET_TEMPERATURE = 108  # default temperature to reset to after timer
@@ -56,10 +67,36 @@ _start_timer_reset_duration = (
     None  # Duration (minutes) for the reset timer after start timer expires
 )
 
+# LDR heater detection state
+_heater_on = False
+_ldr_auto_timer_enabled = False   # persisted to LDR_SETTINGS_FILE
+_ldr_saved_temp = None            # temp to restore when heater turns off
+_ldr_timer_cancel_event = None    # threading.Event to cancel 15-min timer
+_ldr_timer_lock = threading.Lock()
+
 ###########################
 # Actual motor control
 ###########################
 #
+
+
+def _check_ldr_debounce(buffer: list, heater_on_level: int):
+    """
+    Inspect the rolling sample buffer and return a confirmed state or None.
+
+    Returns:
+        True  — heater is ON (all last N samples == heater_on_level)
+        False — heater is OFF (all last N samples != heater_on_level)
+        None  — inconclusive (buffer too short or mixed readings)
+    """
+    if len(buffer) < LDR_DEBOUNCE_SAMPLES:
+        return None
+    last_n = buffer[-LDR_DEBOUNCE_SAMPLES:]
+    if all(r == heater_on_level for r in last_n):
+        return True
+    if all(r != heater_on_level for r in last_n):
+        return False
+    return None
 
 
 def motor_control(steps, clockwise=True, steptype="Full"):
