@@ -18,5 +18,10 @@ dependencies = [
     "flask-socketio>=5.5.1",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
 [tool.setuptools]
 py-modules = ["main"]
