@@ -99,6 +99,27 @@ def _check_ldr_debounce(buffer: list, heater_on_level: int):
     return None
 
 
+def _load_ldr_settings(path: str = LDR_SETTINGS_FILE) -> dict:
+    """Load LDR settings from JSON file. Returns defaults if missing or corrupt."""
+    defaults = {"auto_timer_enabled": False}
+    if not os.path.exists(path):
+        return defaults
+    try:
+        with open(path, "r") as f:
+            return {**defaults, **json.load(f)}
+    except Exception:
+        return defaults
+
+
+def _save_ldr_settings(settings: dict, path: str = LDR_SETTINGS_FILE) -> None:
+    """Persist LDR settings to JSON file."""
+    try:
+        with open(path, "w") as f:
+            json.dump(settings, f)
+    except Exception as e:
+        print(f"Failed to save LDR settings: {e}")
+
+
 def motor_control(steps, clockwise=True, steptype="Full"):
     """Clockwise to increase temperature."""
     print(f"Move motor {steps} clockwise? {clockwise} type {steptype}")
@@ -454,6 +475,8 @@ if __name__ == "__main__":
     import sys
 
     load_temperature()
+    settings = _load_ldr_settings()
+    _ldr_auto_timer_enabled = settings["auto_timer_enabled"]
     if len(sys.argv) > 1 and sys.argv[1].startswith("--"):
         main()
     else:
