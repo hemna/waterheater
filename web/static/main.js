@@ -103,3 +103,35 @@ socket.on('timer_state', function(msg) {
 socket.on('start_timer_state', function(msg) {
     updateStartTimerDisplay(msg.end_timestamp || null, msg.intermediate_temperature, msg.reset_duration);
 });
+
+// ── LDR heater detection ──────────────────────────────────────────────
+socket.on('heater_state', function(msg) {
+    var on = msg.on;
+    var indicator = document.getElementById('heaterIndicator');
+    var label = document.getElementById('heaterLabel');
+    var checkbox = document.getElementById('ldrAutoTimer');
+
+    if (on) {
+        indicator.classList.remove('heater-indicator--off');
+        indicator.classList.add('heater-indicator--on');
+        label.textContent = 'Heater ON';
+        label.classList.add('heater-label--on');
+    } else {
+        indicator.classList.remove('heater-indicator--on');
+        indicator.classList.add('heater-indicator--off');
+        label.textContent = 'Heater OFF';
+        label.classList.remove('heater-label--on');
+    }
+
+    if (checkbox) {
+        checkbox.checked = msg.auto_timer_enabled;
+    }
+});
+
+// LDR auto-timer checkbox
+var ldrCheckbox = document.getElementById('ldrAutoTimer');
+if (ldrCheckbox) {
+    ldrCheckbox.addEventListener('change', function() {
+        socket.emit('set_ldr_auto_timer', {'enabled': this.checked});
+    });
+}
