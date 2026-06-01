@@ -422,6 +422,7 @@ class ControlNamespace(Namespace):
         )
         _emit_timer_state()
         _emit_start_timer_state()
+        _emit_heater_state()
 
     def on_disconnect(self):
         print("Client disconnected")
@@ -542,6 +543,21 @@ class ControlNamespace(Namespace):
             ev.set()
         _emit_start_timer_state()
         print("Start timer cancelled")
+
+    def on_set_ldr_auto_timer(self, data):
+        """Enable or disable the LDR auto-timer. Persists to file."""
+        global _ldr_auto_timer_enabled, _ldr_timer_cancel_event
+        enabled = bool(data.get("enabled", False))
+        _ldr_auto_timer_enabled = enabled
+        _save_ldr_settings({"auto_timer_enabled": enabled})
+        # If disabling while a timer is running, cancel it
+        if not enabled:
+            with _ldr_timer_lock:
+                ev = _ldr_timer_cancel_event
+            if ev:
+                ev.set()
+        _emit_heater_state()
+        print(f"LDR auto-timer {'enabled' if enabled else 'disabled'}")
 
 
 @flask_app.route("/")
