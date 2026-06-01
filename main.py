@@ -74,6 +74,9 @@ _ldr_saved_temp = None            # temp to restore when heater turns off
 _ldr_timer_cancel_event = None    # threading.Event to cancel 15-min timer
 _ldr_timer_lock = threading.Lock()
 
+# SocketIO instance (set in __main__ or init_flask)
+sio = None
+
 ###########################
 # Actual motor control
 ###########################
@@ -118,6 +121,97 @@ def _save_ldr_settings(settings: dict, path: str = LDR_SETTINGS_FILE) -> None:
             json.dump(settings, f)
     except Exception as e:
         print(f"Failed to save LDR settings: {e}")
+
+
+def _emit_heater_state():
+    """Broadcast current heater on/off state and auto-timer setting to all clients."""
+    sio.emit(
+        "heater_state",
+        {"on": _heater_on, "auto_timer_enabled": _ldr_auto_timer_enabled},
+        namespace=APP_NAMESPACE,
+    )
+
+
+def _ldr_poll_tick(reading: int, buffer: list) -> None:
+    """
+    Process one LDR sample. Updates global heater state and triggers side effects.
+
+    Args:
+        reading: Raw GPIO value (0=LOW, 1=HIGH)
+        buffer:  Rolling sample buffer (last LDR_DEBOUNCE_SAMPLES readings)
+    """
+    global _heater_on, _ldr_saved_temp, _ldr_timer_cancel_event
+
+    confirmed = _check_ldr_debounce(buffer, LDR_HEATER_ON_LEVEL)
+    if confirmed is None:
+        return  # inconclusive — wait for more samples
+    if confirmed == _heater_on:
+        return  # no change
+
+    if confirmed is True:
+        # OFF → ON transition
+        _heater_on = True
+        _emit_heater_state()
+        if _ldr_auto_timer_enabled:
+            _start_ldr_timer()
+    else:
+        # ON → OFF transition
+        _heater_on = False
+        _emit_heater_state()
+        # Cancel LDR timer if still running
+        with _ldr_timer_lock:
+            ev = _ldr_timer_cancel_event
+        if ev:
+            ev.set()
+        # Restore temperature if it was reduced
+        if _ldr_saved_temp is not None:
+            set_temperature(_ldr_saved_temp)
+            _ldr_saved_temp = None
+
+
+def _ldr_polling_thread():
+    """Background daemon thread: polls LDR GPIO pin every LDR_POLL_INTERVAL seconds."""
+    import RPi.GPIO as GPIO
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(LDR_GPIO_PIN, GPIO.IN)
+    buffer = []
+    while True:
+        reading = GPIO.input(LDR_GPIO_PIN)
+        buffer.append(reading)
+        # Keep buffer from growing indefinitely
+        if len(buffer) > LDR_DEBOUNCE_SAMPLES * 2:
+            buffer = buffer[-LDR_DEBOUNCE_SAMPLES:]
+        _ldr_poll_tick(reading, buffer)
+        time.sleep(LDR_POLL_INTERVAL)
+
+
+def _start_ldr_timer():
+    """Start the 15-minute LDR auto-timer. Cancels any existing one."""
+    global _ldr_timer_cancel_event
+    with _ldr_timer_lock:
+        if _ldr_timer_cancel_event:
+            _ldr_timer_cancel_event.set()
+        _ldr_timer_cancel_event = threading.Event()
+    threading.Thread(target=_ldr_timer_worker, daemon=True).start()
+    print(f"LDR auto-timer started: will reduce to {LDR_REDUCED_TEMP}°F in {LDR_AUTO_TIMER_MINUTES} min")
+
+
+def _ldr_timer_worker():
+    """Background thread: wait LDR_AUTO_TIMER_MINUTES, then save temp and reduce to 97°F."""
+    global _ldr_saved_temp, _ldr_timer_cancel_event
+    with _ldr_timer_lock:
+        cancel_ev = _ldr_timer_cancel_event
+    if cancel_ev is None:
+        return
+    duration_seconds = LDR_AUTO_TIMER_MINUTES * 60
+    if cancel_ev.wait(timeout=duration_seconds):
+        # Cancelled before timer fired
+        print("LDR auto-timer cancelled")
+        return
+    # Timer fired — save current temp and reduce
+    _ldr_saved_temp = CURRENT_TEMPERATURE
+    set_temperature(LDR_REDUCED_TEMP)
+    print(f"LDR auto-timer fired: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
 
 
 def motor_control(steps, clockwise=True, steptype="Full"):
@@ -482,6 +576,8 @@ if __name__ == "__main__":
     else:
         print("init_flask()")
         sio = init_flask()
+        threading.Thread(target=_ldr_polling_thread, daemon=True).start()
+        print("LDR polling thread started")
         print(f"Starting web server with SocketIO on http://0.0.0.0:{WEB_PORT} ...")
         sio.run(
             flask_app,

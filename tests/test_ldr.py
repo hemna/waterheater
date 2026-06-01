@@ -62,3 +62,88 @@ class TestLdrSettingsPersistence:
         main._save_ldr_settings({"auto_timer_enabled": True}, str(f))
         data = json.loads(f.read_text())
         assert data["auto_timer_enabled"] is True
+
+
+class TestLdrStateTransitions:
+    def test_off_to_on_transition_sets_heater_on(self):
+        """When debounce confirms ON, _heater_on becomes True."""
+        main._heater_on = False
+        main._ldr_auto_timer_enabled = False
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main._start_ldr_timer') as mock_start_timer:
+            main._ldr_poll_tick(0, [0, 0, 0])
+        assert main._heater_on is True
+
+    def test_on_to_off_transition_sets_heater_off(self):
+        """When debounce confirms OFF, _heater_on becomes False."""
+        main._heater_on = True
+        main._ldr_saved_temp = None
+        with patch.object(main, 'sio', MagicMock()):
+            main._ldr_poll_tick(1, [1, 1, 1])
+        assert main._heater_on is False
+
+    def test_on_to_off_restores_saved_temp(self):
+        """When heater turns off and temp was reduced, restore it."""
+        main._heater_on = True
+        main._ldr_saved_temp = 108
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main.set_temperature') as mock_set_temp:
+            main._ldr_poll_tick(1, [1, 1, 1])
+        mock_set_temp.assert_called_once_with(108)
+        assert main._ldr_saved_temp is None
+
+    def test_on_to_off_does_not_restore_when_no_saved_temp(self):
+        """When heater turns off and timer hadn't fired, no temp restore."""
+        main._heater_on = True
+        main._ldr_saved_temp = None
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main.set_temperature') as mock_set_temp:
+            main._ldr_poll_tick(1, [1, 1, 1])
+        mock_set_temp.assert_not_called()
+
+    def test_off_to_on_starts_timer_when_auto_enabled(self):
+        """When heater turns on with auto-timer enabled, _start_ldr_timer is called."""
+        main._heater_on = False
+        main._ldr_auto_timer_enabled = True
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main._start_ldr_timer') as mock_start_timer:
+            main._ldr_poll_tick(0, [0, 0, 0])
+        mock_start_timer.assert_called_once()
+        assert main._heater_on is True
+
+    def test_off_to_on_does_not_start_timer_when_auto_disabled(self):
+        """When heater turns on with auto-timer disabled, no timer is started."""
+        main._heater_on = False
+        main._ldr_auto_timer_enabled = False
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main._start_ldr_timer') as mock_start_timer:
+            main._ldr_poll_tick(0, [0, 0, 0])
+        mock_start_timer.assert_not_called()
+
+
+class TestLdrTimerWorker:
+    def test_timer_reduces_temp_after_firing(self):
+        """Timer worker saves current temp and sets to 97°F on completion."""
+        main.CURRENT_TEMPERATURE = 108
+        main._ldr_saved_temp = None
+        cancel_event = threading.Event()
+        with main._ldr_timer_lock:
+            main._ldr_timer_cancel_event = cancel_event
+        with patch('main.set_temperature') as mock_set_temp, \
+             patch.object(main, 'LDR_AUTO_TIMER_MINUTES', 0.0001):
+            main._ldr_timer_worker()
+        assert main._ldr_saved_temp == 108
+        mock_set_temp.assert_called_once_with(main.LDR_REDUCED_TEMP)
+
+    def test_timer_does_nothing_when_cancelled(self):
+        """Cancelled timer does not change temperature."""
+        main.CURRENT_TEMPERATURE = 108
+        main._ldr_saved_temp = None
+        cancel_event = threading.Event()
+        cancel_event.set()  # pre-cancelled
+        with main._ldr_timer_lock:
+            main._ldr_timer_cancel_event = cancel_event
+        with patch('main.set_temperature') as mock_set_temp:
+            main._ldr_timer_worker()
+        mock_set_temp.assert_not_called()
+        assert main._ldr_saved_temp is None
