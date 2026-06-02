@@ -131,22 +131,14 @@
         </header>
 
         <main class="app-main">
-            <section class="card card-heater">
-                <h2 class="card-title">Heater Status</h2>
-                <div class="heater-indicator-wrap">
-                    <div id="heaterIndicator" class="heater-indicator heater-indicator--off" aria-label="Heater status indicator"></div>
-                    <p id="heaterLabel" class="heater-label">Heater OFF</p>
-                </div>
-                <div class="heater-auto">
-                    <label class="heater-auto-label">
-                        <input type="checkbox" id="ldrAutoTimer" class="heater-auto-checkbox">
-                        Auto-reduce to 97°F after 15 min
-                    </label>
-                    <span class="form-text heater-auto-hint">When burner turns off, temperature is restored automatically.</span>
-                </div>
-            </section>
             <section class="card card-temp">
-                <h2 class="card-title">Temperature</h2>
+                <div class="card-temp-header">
+                    <h2 class="card-title">Temperature</h2>
+                    <div class="heater-status-inline">
+                        <div id="heaterIndicator" class="heater-indicator heater-indicator--off" aria-label="Heater status indicator"></div>
+                        <p id="heaterLabel" class="heater-label">Heater OFF</p>
+                    </div>
+                </div>
                 <div class="temp-hero">
                     <span id="tempDisplay" class="temp-value">—</span>
                     <span class="temp-unit">°F</span>
@@ -176,6 +168,13 @@
                         Auto-start timer when temperature is set
                     </label>
                     <span class="form-text temp-auto-hint">If a timer is already running, it will be reset.</span>
+                </div>
+                <div class="heater-auto">
+                    <label class="heater-auto-label">
+                        <input type="checkbox" id="ldrAutoTimer" class="heater-auto-checkbox">
+                        Auto-reduce to 97°F after 15 min
+                    </label>
+                    <span class="form-text heater-auto-hint">When burner turns off, temperature is restored automatically.</span>
                 </div>
             </section>
 

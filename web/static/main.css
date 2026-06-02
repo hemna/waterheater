@@ -363,17 +363,23 @@ body {
 
 /* ─── Heater status indicator ─── */
 
-.heater-indicator-wrap {
+.card-temp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+}
+
+.heater-status-inline {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1rem 0;
+    gap: 0.25rem;
 }
 
 .heater-indicator {
-    width: 80px;
-    height: 80px;
+    width: 64px;
+    height: 64px;
     border-radius: 50%;
     transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
@@ -399,10 +405,11 @@ body {
 }
 
 .heater-label {
-    font-size: 1rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: var(--text-muted);
     margin: 0;
+    text-align: center;
 }
 
 .heater-label--on {
