@@ -67,7 +67,7 @@ Aim the sensor at the heater's sight glass or pilot light window. The onboard po
 In `main.py`, update two constants near the top of the file:
 
 ```python
-LDR_GPIO_PIN = 25          # set to the BCM pin number you wired DO to
+LDR_GPIO_PIN = 17          # BCM pin 17 (DO wire)
 LDR_HEATER_ON_LEVEL = 0    # 0 = LOW when burner on; change to 1 if your
                             # module outputs HIGH when light is detected
 ```
@@ -78,9 +78,9 @@ To find the right pin number and verify polarity, run this one-liner on the Pi a
 python3 -c "
 import RPi.GPIO as GPIO, time
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(25, GPIO.IN)          # replace 25 with your pin
+GPIO.setup(17, GPIO.IN)          # BCM pin 17
 for _ in range(20):
-    print(GPIO.input(25))
+    print(GPIO.input(17))
     time.sleep(0.5)
 GPIO.cleanup()
 "

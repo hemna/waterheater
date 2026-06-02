@@ -38,7 +38,7 @@ EN_pin = 24  # enable pin (LOW to enable)
 # LDR sensor (photoresistor) GPIO config
 # DO pin goes LOW when light detected (heater burner on)
 # Update LDR_GPIO_PIN to the correct pin once hardware is wired
-LDR_GPIO_PIN = 25
+LDR_GPIO_PIN = 17
 LDR_HEATER_ON_LEVEL = 0        # GPIO.LOW — DO goes LOW when light detected
 LDR_POLL_INTERVAL = 0.25       # seconds between GPIO reads
 LDR_DEBOUNCE_SAMPLES = 3       # consecutive matching reads to confirm state change
