@@ -44,8 +44,8 @@ LDR_POLL_INTERVAL = 0.25       # seconds between GPIO reads
 LDR_DEBOUNCE_SAMPLES = 3       # consecutive matching reads to confirm state change
 LDR_AUTO_TIMER_MINUTES = 15
 LDR_REDUCED_TEMP = 97
-LDR_PROGRESSIVE_INTERVAL_MINUTES = 5   # drop every N minutes after initial reduction
-LDR_PROGRESSIVE_STEP = 5               # degrees to drop each interval
+LDR_PROGRESSIVE_INTERVAL_MINUTES = 1   # drop every N minutes after initial reduction
+LDR_PROGRESSIVE_STEP = 1               # degrees to drop each interval
 LDR_PROGRESSIVE_MIN_TEMP = 80          # never go below this
 LDR_SETTINGS_FILE = "/tmp/ldr_settings.json"
 
