@@ -604,17 +604,13 @@ if __name__ == "__main__":
     else:
         print("init_flask()")
         sio = init_flask()
-        # Only start the LDR thread in the Werkzeug inner process (WERKZEUG_RUN_MAIN=true).
-        # With debug=True the reloader spawns two processes: the outer file-watcher and
-        # the inner request-handler. GPIO must be claimed by the inner process (the one
-        # that actually serves Socket.IO clients), not the outer one.
-        if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-            threading.Thread(target=_ldr_polling_thread, daemon=True).start()
-            print("LDR polling thread started")
+        threading.Thread(target=_ldr_polling_thread, daemon=True).start()
+        print("LDR polling thread started")
         print(f"Starting web server with SocketIO on http://0.0.0.0:{WEB_PORT} ...")
         sio.run(
             flask_app,
             debug=True,
+            use_reloader=False,  # one process only — avoids two-process GPIO conflict
             host="0.0.0.0",
             port=WEB_PORT,
             allow_unsafe_werkzeug=True,
