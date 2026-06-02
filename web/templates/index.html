@@ -126,7 +126,13 @@
 <body>
     <div class="app">
         <header class="app-header">
-            <h1 class="app-title">Water Heater</h1>
+            <div class="app-header-top">
+                <h1 class="app-title">Water Heater</h1>
+                <div id="connStatus" class="conn-status conn-status--disconnected" title="Disconnected">
+                    <span class="conn-dot"></span>
+                    <span class="conn-label">Disconnected</span>
+                </div>
+            </div>
             <p class="app-subtitle">Temperature & timer control</p>
         </header>
 

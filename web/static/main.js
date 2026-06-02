@@ -75,8 +75,27 @@ function updateStartTimerDisplay(endTimestamp, intermediateTemp, resetDuration) 
     }
 }
 
+function setConnStatus(state) {
+    // state: 'connected' | 'disconnected' | 'reconnecting'
+    var el = document.getElementById('connStatus');
+    var label = el.querySelector('.conn-label');
+    el.className = 'conn-status conn-status--' + state;
+    label.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+}
+
 socket.on('connect', function() {
     console.log('Connected to server');
+    setConnStatus('connected');
+});
+
+socket.on('disconnect', function() {
+    console.log('Disconnected from server');
+    setConnStatus('disconnected');
+});
+
+socket.on('reconnecting', function() {
+    console.log('Reconnecting...');
+    setConnStatus('reconnecting');
 });
 
 socket.on('motor_status', function(msg) {
