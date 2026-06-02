@@ -44,6 +44,9 @@ LDR_POLL_INTERVAL = 0.25       # seconds between GPIO reads
 LDR_DEBOUNCE_SAMPLES = 3       # consecutive matching reads to confirm state change
 LDR_AUTO_TIMER_MINUTES = 15
 LDR_REDUCED_TEMP = 97
+LDR_PROGRESSIVE_INTERVAL_MINUTES = 5   # drop every N minutes after initial reduction
+LDR_PROGRESSIVE_STEP = 5               # degrees to drop each interval
+LDR_PROGRESSIVE_MIN_TEMP = 80          # never go below this
 LDR_SETTINGS_FILE = "/tmp/ldr_settings.json"
 
 TEMPERATURE_FILE = "/tmp/current_temperature.json"
@@ -69,10 +72,13 @@ _start_timer_reset_duration = (
 
 # LDR heater detection state
 _heater_on = False
-_ldr_auto_timer_enabled = False   # persisted to LDR_SETTINGS_FILE
-_ldr_saved_temp = None            # temp to restore when heater turns off
-_ldr_timer_cancel_event = None    # threading.Event to cancel 15-min timer
+_ldr_auto_timer_enabled = False        # persisted to LDR_SETTINGS_FILE
+_ldr_progressive_enabled = False       # persisted to LDR_SETTINGS_FILE
+_ldr_saved_temp = None                 # temp to restore when heater turns off
+_ldr_timer_cancel_event = None         # threading.Event to cancel 15-min timer
 _ldr_timer_lock = threading.Lock()
+_ldr_progressive_cancel_event = None   # threading.Event to cancel progressive drops
+_ldr_progressive_lock = threading.Lock()
 
 # SocketIO instance (set in __main__ or init_flask)
 sio = None
@@ -104,7 +110,7 @@ def _check_ldr_debounce(buffer: list, heater_on_level: int):
 
 def _load_ldr_settings(path: str = LDR_SETTINGS_FILE) -> dict:
     """Load LDR settings from JSON file. Returns defaults if missing or corrupt."""
-    defaults = {"auto_timer_enabled": False}
+    defaults = {"auto_timer_enabled": False, "progressive_enabled": False}
     if not os.path.exists(path):
         return defaults
     try:
@@ -124,10 +130,14 @@ def _save_ldr_settings(settings: dict, path: str = LDR_SETTINGS_FILE) -> None:
 
 
 def _emit_heater_state():
-    """Broadcast current heater on/off state and auto-timer setting to all clients."""
+    """Broadcast current heater on/off state and settings to all clients."""
     sio.emit(
         "heater_state",
-        {"on": _heater_on, "auto_timer_enabled": _ldr_auto_timer_enabled},
+        {
+            "on": _heater_on,
+            "auto_timer_enabled": _ldr_auto_timer_enabled,
+            "progressive_enabled": _ldr_progressive_enabled,
+        },
         namespace=APP_NAMESPACE,
     )
 
@@ -163,6 +173,11 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
             ev = _ldr_timer_cancel_event
         if ev:
             ev.set()
+        # Cancel progressive cooling if still running
+        with _ldr_progressive_lock:
+            pev = _ldr_progressive_cancel_event
+        if pev:
+            pev.set()
         # Restore temperature if it was reduced
         if _ldr_saved_temp is not None:
             set_temperature(_ldr_saved_temp)
@@ -209,7 +224,9 @@ def _start_ldr_timer():
 
 
 def _ldr_timer_worker():
-    """Background thread: wait LDR_AUTO_TIMER_MINUTES, then save temp and reduce to 97°F."""
+    """Background thread: wait LDR_AUTO_TIMER_MINUTES, then save temp and reduce to 97°F.
+    If progressive mode is enabled, kick off the progressive cooling worker afterward.
+    """
     global _ldr_saved_temp, _ldr_timer_cancel_event
     with _ldr_timer_lock:
         cancel_ev = _ldr_timer_cancel_event
@@ -224,6 +241,42 @@ def _ldr_timer_worker():
     _ldr_saved_temp = CURRENT_TEMPERATURE
     set_temperature(LDR_REDUCED_TEMP)
     print(f"LDR auto-timer fired: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
+    # Start progressive cooling if enabled
+    if _ldr_progressive_enabled:
+        _start_ldr_progressive()
+
+
+def _start_ldr_progressive():
+    """Start progressive cooling: drop LDR_PROGRESSIVE_STEP°F every LDR_PROGRESSIVE_INTERVAL_MINUTES
+    until LDR_PROGRESSIVE_MIN_TEMP or heater turns off."""
+    global _ldr_progressive_cancel_event
+    with _ldr_progressive_lock:
+        if _ldr_progressive_cancel_event:
+            _ldr_progressive_cancel_event.set()
+        _ldr_progressive_cancel_event = threading.Event()
+    threading.Thread(target=_ldr_progressive_worker, daemon=True).start()
+    print(f"LDR progressive cooling started: -{LDR_PROGRESSIVE_STEP}°F every {LDR_PROGRESSIVE_INTERVAL_MINUTES} min, floor {LDR_PROGRESSIVE_MIN_TEMP}°F")
+
+
+def _ldr_progressive_worker():
+    """Background thread: every LDR_PROGRESSIVE_INTERVAL_MINUTES drop CURRENT_TEMPERATURE
+    by LDR_PROGRESSIVE_STEP°F, stopping at LDR_PROGRESSIVE_MIN_TEMP or when cancelled."""
+    global _ldr_progressive_cancel_event
+    with _ldr_progressive_lock:
+        cancel_ev = _ldr_progressive_cancel_event
+    if cancel_ev is None:
+        return
+    interval_seconds = LDR_PROGRESSIVE_INTERVAL_MINUTES * 60
+    while True:
+        if cancel_ev.wait(timeout=interval_seconds):
+            print("LDR progressive cooling cancelled")
+            return
+        new_temp = max(CURRENT_TEMPERATURE - LDR_PROGRESSIVE_STEP, LDR_PROGRESSIVE_MIN_TEMP)
+        if CURRENT_TEMPERATURE <= LDR_PROGRESSIVE_MIN_TEMP:
+            print(f"LDR progressive cooling reached floor {LDR_PROGRESSIVE_MIN_TEMP}°F, stopping")
+            return
+        set_temperature(new_temp)
+        print(f"LDR progressive cooling: reduced to {new_temp}°F")
 
 
 def motor_control(steps, clockwise=True, steptype="Full"):
@@ -561,7 +614,7 @@ class ControlNamespace(Namespace):
         global _ldr_auto_timer_enabled, _ldr_timer_cancel_event
         enabled = bool(data.get("enabled", False))
         _ldr_auto_timer_enabled = enabled
-        _save_ldr_settings({"auto_timer_enabled": enabled})
+        _save_ldr_settings({"auto_timer_enabled": enabled, "progressive_enabled": _ldr_progressive_enabled})
         # If disabling while a timer is running, cancel it
         if not enabled:
             with _ldr_timer_lock:
@@ -570,6 +623,21 @@ class ControlNamespace(Namespace):
                 ev.set()
         _emit_heater_state()
         print(f"LDR auto-timer {'enabled' if enabled else 'disabled'}")
+
+    def on_set_ldr_progressive(self, data):
+        """Enable or disable progressive cooling. Persists to file."""
+        global _ldr_progressive_enabled, _ldr_progressive_cancel_event
+        enabled = bool(data.get("enabled", False))
+        _ldr_progressive_enabled = enabled
+        _save_ldr_settings({"auto_timer_enabled": _ldr_auto_timer_enabled, "progressive_enabled": enabled})
+        # If disabling while progressive cooling is running, cancel it
+        if not enabled:
+            with _ldr_progressive_lock:
+                ev = _ldr_progressive_cancel_event
+            if ev:
+                ev.set()
+        _emit_heater_state()
+        print(f"LDR progressive cooling {'enabled' if enabled else 'disabled'}")
 
 
 @flask_app.route("/")
@@ -599,6 +667,7 @@ if __name__ == "__main__":
     load_temperature()
     settings = _load_ldr_settings()
     _ldr_auto_timer_enabled = settings["auto_timer_enabled"]
+    _ldr_progressive_enabled = settings["progressive_enabled"]
     if len(sys.argv) > 1 and sys.argv[1].startswith("--"):
         main()
     else:

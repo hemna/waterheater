@@ -145,6 +145,11 @@ socket.on('heater_state', function(msg) {
     if (checkbox) {
         checkbox.checked = msg.auto_timer_enabled;
     }
+
+    var progressiveCheckbox = document.getElementById('ldrProgressive');
+    if (progressiveCheckbox) {
+        progressiveCheckbox.checked = msg.progressive_enabled;
+    }
 });
 
 // LDR auto-timer checkbox
@@ -152,5 +157,13 @@ var ldrCheckbox = document.getElementById('ldrAutoTimer');
 if (ldrCheckbox) {
     ldrCheckbox.addEventListener('change', function() {
         socket.emit('set_ldr_auto_timer', {'enabled': this.checked});
+    });
+}
+
+// LDR progressive cooling checkbox
+var ldrProgressiveCheckbox = document.getElementById('ldrProgressive');
+if (ldrProgressiveCheckbox) {
+    ldrProgressiveCheckbox.addEventListener('change', function() {
+        socket.emit('set_ldr_progressive', {'enabled': this.checked});
     });
 }

@@ -49,7 +49,7 @@ class TestLdrDebounceSamples:
 class TestLdrSettingsPersistence:
     def test_load_settings_returns_false_when_file_missing(self, tmp_path):
         result = main._load_ldr_settings(str(tmp_path / "missing.json"))
-        assert result == {"auto_timer_enabled": False}
+        assert result == {"auto_timer_enabled": False, "progressive_enabled": False}
 
     def test_load_settings_reads_existing_file(self, tmp_path):
         f = tmp_path / "ldr.json"
