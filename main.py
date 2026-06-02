@@ -170,10 +170,22 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
 
 
 def _ldr_polling_thread():
-    """Background daemon thread: polls LDR GPIO pin every LDR_POLL_INTERVAL seconds."""
+    """Background daemon thread: polls LDR GPIO pin every LDR_POLL_INTERVAL seconds.
+
+    Retries GPIO setup until the pin is available — the Werkzeug debug reloader
+    briefly runs two processes simultaneously, which can cause a 'GPIO busy' error
+    on startup in the short-lived parent process.
+    """
     import RPi.GPIO as GPIO
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(LDR_GPIO_PIN, GPIO.IN)
+    while True:
+        try:
+            GPIO.setup(LDR_GPIO_PIN, GPIO.IN)
+            print(f"LDR polling started on GPIO {LDR_GPIO_PIN}")
+            break
+        except Exception as e:
+            print(f"LDR GPIO setup failed ({e}), retrying in 2s...")
+            time.sleep(2)
     buffer = []
     while True:
         reading = GPIO.input(LDR_GPIO_PIN)
