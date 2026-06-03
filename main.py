@@ -152,6 +152,10 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
     """
     global _heater_on, _ldr_saved_temp, _ldr_timer_cancel_event
 
+    # Temporary debug: log reading every 2 seconds (every 8th tick at 250ms)
+    if len(buffer) % 8 == 0:
+        print(f"LDR debug: reading={reading} buffer={buffer[-3:]} heater_on={_heater_on}")
+
     confirmed = _check_ldr_debounce(buffer, LDR_HEATER_ON_LEVEL)
     if confirmed is None:
         return  # inconclusive — wait for more samples
