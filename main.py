@@ -75,6 +75,7 @@ _heater_on = False
 _ldr_auto_timer_enabled = False        # persisted to LDR_SETTINGS_FILE
 _ldr_progressive_enabled = False       # persisted to LDR_SETTINGS_FILE
 _ldr_saved_temp = None                 # temp to restore when heater turns off
+_ldr_timer_end_timestamp = None        # Unix time when auto-reduce will fire, or None
 _ldr_timer_cancel_event = None         # threading.Event to cancel 15-min timer
 _ldr_timer_lock = threading.Lock()
 _ldr_progressive_cancel_event = None   # threading.Event to cancel progressive drops
@@ -171,8 +172,10 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
         # Cancel LDR timer if still running
         with _ldr_timer_lock:
             ev = _ldr_timer_cancel_event
+            _ldr_timer_end_timestamp = None
         if ev:
             ev.set()
+        _emit_ldr_timer_state()
         # Cancel progressive cooling if still running
         with _ldr_progressive_lock:
             pev = _ldr_progressive_cancel_event
@@ -212,13 +215,24 @@ def _ldr_polling_thread():
         time.sleep(LDR_POLL_INTERVAL)
 
 
+def _emit_ldr_timer_state():
+    """Broadcast LDR auto-reduce timer end timestamp to all clients."""
+    sio.emit(
+        "ldr_timer_state",
+        {"end_timestamp": _ldr_timer_end_timestamp},
+        namespace=APP_NAMESPACE,
+    )
+
+
 def _start_ldr_timer():
-    """Start the 15-minute LDR auto-timer. Cancels any existing one."""
-    global _ldr_timer_cancel_event
+    """Start the LDR auto-reduce timer. Cancels any existing one."""
+    global _ldr_timer_cancel_event, _ldr_timer_end_timestamp
     with _ldr_timer_lock:
         if _ldr_timer_cancel_event:
             _ldr_timer_cancel_event.set()
         _ldr_timer_cancel_event = threading.Event()
+        _ldr_timer_end_timestamp = time.time() + LDR_AUTO_TIMER_MINUTES * 60
+    _emit_ldr_timer_state()
     threading.Thread(target=_ldr_timer_worker, daemon=True).start()
     print(f"LDR auto-timer started: will reduce to {LDR_REDUCED_TEMP}°F in {LDR_AUTO_TIMER_MINUTES} min")
 
@@ -227,7 +241,7 @@ def _ldr_timer_worker():
     """Background thread: wait LDR_AUTO_TIMER_MINUTES, then save temp and reduce to 97°F.
     If progressive mode is enabled, kick off the progressive cooling worker afterward.
     """
-    global _ldr_saved_temp, _ldr_timer_cancel_event
+    global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
     with _ldr_timer_lock:
         cancel_ev = _ldr_timer_cancel_event
     if cancel_ev is None:
@@ -235,9 +249,15 @@ def _ldr_timer_worker():
     duration_seconds = LDR_AUTO_TIMER_MINUTES * 60
     if cancel_ev.wait(timeout=duration_seconds):
         # Cancelled before timer fired
+        with _ldr_timer_lock:
+            _ldr_timer_end_timestamp = None
+        _emit_ldr_timer_state()
         print("LDR auto-timer cancelled")
         return
     # Timer fired — save current temp and reduce
+    with _ldr_timer_lock:
+        _ldr_timer_end_timestamp = None
+    _emit_ldr_timer_state()
     _ldr_saved_temp = CURRENT_TEMPERATURE
     set_temperature(LDR_REDUCED_TEMP)
     print(f"LDR auto-timer fired: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
@@ -488,6 +508,7 @@ class ControlNamespace(Namespace):
         _emit_timer_state()
         _emit_start_timer_state()
         _emit_heater_state()
+        _emit_ldr_timer_state()
 
     def on_disconnect(self):
         print("Client disconnected")

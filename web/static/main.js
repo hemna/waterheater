@@ -75,6 +75,43 @@ function updateStartTimerDisplay(endTimestamp, intermediateTemp, resetDuration) 
     }
 }
 
+let ldrTimerCountdownInterval = null;
+let currentLdrTimerEnd = null;
+
+function updateLdrTimerDisplay(endTimestamp) {
+    currentLdrTimerEnd = endTimestamp || null;
+    const el = document.getElementById('ldrTimerCountdown');
+    if (!el) return;
+    if (!currentLdrTimerEnd) {
+        el.hidden = true;
+        if (ldrTimerCountdownInterval) {
+            clearInterval(ldrTimerCountdownInterval);
+            ldrTimerCountdownInterval = null;
+        }
+        return;
+    }
+    el.hidden = false;
+    function tick() {
+        if (!currentLdrTimerEnd) return;
+        const now = Date.now() / 1000;
+        const left = Math.max(0, currentLdrTimerEnd - now);
+        el.textContent = 'Reducing to 97°F in ' + formatCountdown(left);
+        if (left <= 0 && ldrTimerCountdownInterval) {
+            clearInterval(ldrTimerCountdownInterval);
+            ldrTimerCountdownInterval = null;
+        }
+    }
+    tick();
+    if (!ldrTimerCountdownInterval) {
+        ldrTimerCountdownInterval = setInterval(tick, 1000);
+    }
+}
+
+
+socket.on('ldr_timer_state', function(msg) {
+    updateLdrTimerDisplay(msg.end_timestamp || null);
+});
+
 function setConnStatus(state) {
     // state: 'connected' | 'disconnected' | 'reconnecting'
     var el = document.getElementById('connStatus');

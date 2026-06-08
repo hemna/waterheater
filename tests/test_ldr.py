@@ -130,7 +130,8 @@ class TestLdrTimerWorker:
         with main._ldr_timer_lock:
             main._ldr_timer_cancel_event = cancel_event
         with patch('main.set_temperature') as mock_set_temp, \
-             patch.object(main, 'LDR_AUTO_TIMER_MINUTES', 0.0001):
+             patch.object(main, 'LDR_AUTO_TIMER_MINUTES', 0.0001), \
+             patch.object(main, 'sio', MagicMock()):
             main._ldr_timer_worker()
         assert main._ldr_saved_temp == 108
         mock_set_temp.assert_called_once_with(main.LDR_REDUCED_TEMP)
@@ -143,7 +144,8 @@ class TestLdrTimerWorker:
         cancel_event.set()  # pre-cancelled
         with main._ldr_timer_lock:
             main._ldr_timer_cancel_event = cancel_event
-        with patch('main.set_temperature') as mock_set_temp:
+        with patch('main.set_temperature') as mock_set_temp, \
+             patch.object(main, 'sio', MagicMock()):
             main._ldr_timer_worker()
         mock_set_temp.assert_not_called()
         assert main._ldr_saved_temp is None
