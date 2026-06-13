@@ -497,6 +497,7 @@ def change_temperature(degrees):
         {"message": f"Temperature changed to {CURRENT_TEMPERATURE} degrees"},
     )
     _safe_emit("temperature_update", {"temperature": CURRENT_TEMPERATURE})
+    mqtt_bridge.publish_state()
 
 
 def set_temperature(temperature):
@@ -516,6 +517,7 @@ def set_temperature(temperature):
         {"message": f"Temperature changed to {CURRENT_TEMPERATURE} degrees"},
     )
     _safe_emit("temperature_update", {"temperature": CURRENT_TEMPERATURE})
+    mqtt_bridge.publish_state()
 
 
 def _emit_timer_state():
