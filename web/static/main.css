@@ -470,6 +470,32 @@ body {
     color: #ef4444;
 }
 
+.heater-duration {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--warm);
+    margin: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.heater-duration[hidden] {
+    display: none !important;
+}
+
+.off-timer-countdown {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.off-timer-countdown[hidden] {
+    display: none !important;
+}
+
 .heater-auto {
     display: flex;
     flex-direction: column;
@@ -495,4 +521,62 @@ body {
 .heater-auto-hint {
     font-size: 0.8rem;
     color: var(--text-muted);
+}
+
+.progressive-floor {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+    margin-left: 1.625rem;
+}
+
+.btn-progressive-now {
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    font-family: inherit;
+    color: white;
+    background: var(--warm);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+}
+
+.btn-progressive-now:hover {
+    background: var(--warm-hover);
+}
+
+.btn-progressive-now:active {
+    transform: scale(0.97);
+}
+
+.btn-progressive-now--active {
+    background: var(--danger);
+}
+
+.btn-progressive-now--active:hover {
+    background: var(--danger-hover);
+}
+
+.progressive-status {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--primary);
+    background: rgba(13, 148, 136, 0.08);
+    border: 1px solid rgba(13, 148, 136, 0.25);
+    border-radius: var(--radius-sm);
+    animation: progressive-pulse 2s ease-in-out infinite;
+}
+
+.progressive-status[hidden] {
+    display: none !important;
+}
+
+@keyframes progressive-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
 }

@@ -9,11 +9,53 @@ let currentStartTimerEnd = null;
 let currentIntermediateTemp = null;
 let currentResetDuration = null;
 
+// Heater duration tracking
+let heaterOnSince = null;  // Unix timestamp (seconds) or null
+let heaterDurationInterval = null;
+
 function formatCountdown(secondsLeft) {
     if (secondsLeft <= 0) return '0:00';
     const m = Math.floor(secondsLeft / 60);
     const s = Math.floor(secondsLeft % 60);
     return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function formatDuration(seconds) {
+    if (seconds < 0) seconds = 0;
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) {
+        return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+    return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function updateHeaterDurationDisplay() {
+    var el = document.getElementById('heaterDuration');
+    if (!el) return;
+    if (!heaterOnSince) {
+        el.hidden = true;
+        if (heaterDurationInterval) {
+            clearInterval(heaterDurationInterval);
+            heaterDurationInterval = null;
+        }
+        return;
+    }
+    el.hidden = false;
+    function tick() {
+        if (!heaterOnSince) {
+            el.hidden = true;
+            return;
+        }
+        var now = Date.now() / 1000;
+        var elapsed = Math.max(0, now - heaterOnSince);
+        el.textContent = 'Burner on for ' + formatDuration(elapsed);
+    }
+    tick();
+    if (!heaterDurationInterval) {
+        heaterDurationInterval = setInterval(tick, 1000);
+    }
 }
 
 function updateTimerDisplay(endTimestamp, resetTemperature) {
@@ -78,6 +120,38 @@ function updateStartTimerDisplay(endTimestamp, intermediateTemp, resetDuration) 
 let ldrTimerCountdownInterval = null;
 let currentLdrTimerEnd = null;
 
+let offTimerCountdownInterval = null;
+let currentOffTimerEnd = null;
+
+function updateOffTimerDisplay(endTimestamp) {
+    currentOffTimerEnd = endTimestamp || null;
+    const el = document.getElementById('offTimerCountdown');
+    if (!el) return;
+    if (!currentOffTimerEnd) {
+        el.hidden = true;
+        if (offTimerCountdownInterval) {
+            clearInterval(offTimerCountdownInterval);
+            offTimerCountdownInterval = null;
+        }
+        return;
+    }
+    el.hidden = false;
+    function tick() {
+        if (!currentOffTimerEnd) return;
+        const now = Date.now() / 1000;
+        const left = Math.max(0, currentOffTimerEnd - now);
+        el.textContent = 'Resetting to 108°F in ' + formatCountdown(left);
+        if (left <= 0 && offTimerCountdownInterval) {
+            clearInterval(offTimerCountdownInterval);
+            offTimerCountdownInterval = null;
+        }
+    }
+    tick();
+    if (!offTimerCountdownInterval) {
+        offTimerCountdownInterval = setInterval(tick, 1000);
+    }
+}
+
 function updateLdrTimerDisplay(endTimestamp) {
     currentLdrTimerEnd = endTimestamp || null;
     const el = document.getElementById('ldrTimerCountdown');
@@ -110,6 +184,10 @@ function updateLdrTimerDisplay(endTimestamp) {
 
 socket.on('ldr_timer_state', function(msg) {
     updateLdrTimerDisplay(msg.end_timestamp || null);
+});
+
+socket.on('off_timer_state', function(msg) {
+    updateOffTimerDisplay(msg.end_timestamp || null);
 });
 
 function setConnStatus(state) {
@@ -179,6 +257,10 @@ socket.on('heater_state', function(msg) {
         label.classList.remove('heater-label--on');
     }
 
+    // Update heater duration tracking
+    heaterOnSince = msg.on_since || null;
+    updateHeaterDurationDisplay();
+
     if (checkbox) {
         checkbox.checked = msg.auto_timer_enabled;
     }
@@ -186,6 +268,33 @@ socket.on('heater_state', function(msg) {
     var progressiveCheckbox = document.getElementById('ldrProgressive');
     if (progressiveCheckbox) {
         progressiveCheckbox.checked = msg.progressive_enabled;
+    }
+
+    // Sync floor temperature from server
+    var floorInput = document.getElementById('progressiveFloor');
+    if (floorInput && msg.progressive_min_temp != null) {
+        floorInput.value = msg.progressive_min_temp;
+    }
+
+    // Update progressive cooling active state
+    var progressiveBtn = document.getElementById('startProgressiveNow');
+    var progressiveStatus = document.getElementById('progressiveStatus');
+    if (progressiveBtn) {
+        if (msg.progressive_active) {
+            progressiveBtn.textContent = 'Stop progressive cooling';
+            progressiveBtn.classList.add('btn-progressive-now--active');
+        } else {
+            progressiveBtn.textContent = 'Start progressive cooling now';
+            progressiveBtn.classList.remove('btn-progressive-now--active');
+        }
+    }
+    if (progressiveStatus) {
+        if (msg.progressive_active) {
+            progressiveStatus.textContent = 'Progressive cooling active — dropping −1°F/min';
+            progressiveStatus.hidden = false;
+        } else {
+            progressiveStatus.hidden = true;
+        }
     }
 });
 
@@ -202,6 +311,25 @@ document.addEventListener('DOMContentLoaded', function() {
     if (ldrProgressiveCheckbox) {
         ldrProgressiveCheckbox.addEventListener('change', function() {
             socket.emit('set_ldr_progressive', {'enabled': this.checked});
+        });
+    }
+
+    var progressiveNowBtn = document.getElementById('startProgressiveNow');
+    if (progressiveNowBtn) {
+        progressiveNowBtn.addEventListener('click', function() {
+            if (this.classList.contains('btn-progressive-now--active')) {
+                socket.emit('stop_progressive_now', {});
+            } else {
+                socket.emit('start_progressive_now', {});
+            }
+        });
+    }
+
+    var setFloorBtn = document.getElementById('setProgressiveFloor');
+    if (setFloorBtn) {
+        setFloorBtn.addEventListener('click', function() {
+            var temp = parseInt(document.getElementById('progressiveFloor').value, 10) || 80;
+            socket.emit('set_progressive_floor', {'temperature': temp});
         });
     }
 });
