@@ -226,7 +226,9 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
             _start_ldr_timer()
     else:
         # Start off-timer: reset to base temp after HEATER_OFF_RESET_MINUTES
-        _start_off_timer()
+        # (only if not already at base temperature)
+        if CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+            _start_off_timer()
         # Cancel LDR timer if still running
         with _ldr_timer_lock:
             ev = _ldr_timer_cancel_event
