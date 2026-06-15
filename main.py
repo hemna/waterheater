@@ -20,6 +20,7 @@ from flask_socketio import SocketIO, Namespace
 import json
 import os
 import mqtt_bridge
+import heater_history
 
 ################################
 # RPi and Motor Pre-allocations
@@ -212,10 +213,12 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
             # OFF → ON transition
             _heater_on = True
             _heater_on_since = time.time()
+            heater_history.record_on(_heater_on_since)
         else:
             # ON → OFF transition
             _heater_on = False
             _heater_on_since = None
+            heater_history.record_off(time.time())
 
     _save_heater_state()
     _emit_heater_state()
@@ -630,6 +633,7 @@ def _get_full_state() -> dict:
         "start_timer_intermediate_temp": intermediate_temp,
         "start_timer_reset_duration": reset_duration,
         "ldr_timer_end_timestamp": _ldr_timer_end_timestamp,
+        "history_stats": heater_history.get_stats(),
     }
 
 
@@ -661,9 +665,21 @@ class ControlNamespace(Namespace):
         _emit_heater_state()
         _emit_ldr_timer_state()
         _emit_off_timer_state()
+        _safe_emit("heater_history", {
+            "events": heater_history.get_history(20),
+            "stats": heater_history.get_stats(),
+        })
 
     def on_disconnect(self):
         print("Client disconnected")
+
+    def on_get_history(self, data):
+        """Client requests heater history."""
+        limit = int(data.get("limit", 20)) if data else 20
+        _safe_emit("heater_history", {
+            "events": heater_history.get_history(limit),
+            "stats": heater_history.get_stats(),
+        })
 
     def on_message(self, sid, data):
         print(f"on_message: Received message: {data}")
@@ -868,6 +884,7 @@ if __name__ == "__main__":
     import sys
 
     load_temperature()
+    heater_history.init()
     settings = _load_ldr_settings()
     _ldr_auto_timer_enabled = settings["auto_timer_enabled"]
     _ldr_progressive_enabled = settings["progressive_enabled"]

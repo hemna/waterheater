@@ -190,6 +190,39 @@ socket.on('off_timer_state', function(msg) {
     updateOffTimerDisplay(msg.end_timestamp || null);
 });
 
+// ── Heater History ────────────────────────────────────────────────────
+socket.on('heater_history', function(msg) {
+    var container = document.getElementById('historyList');
+    var statsEl = document.getElementById('historyStats');
+    if (!container) return;
+
+    // Render stats
+    if (statsEl && msg.stats) {
+        var s = msg.stats;
+        statsEl.textContent = 'Today: ' + s.today_events + ' events · Avg: ' + formatDuration(s.avg_duration) + ' · Longest: ' + formatDuration(s.max_duration);
+    }
+
+    // Render events
+    if (!msg.events || msg.events.length === 0) {
+        container.innerHTML = '<p class="history-empty">No heating events recorded yet.</p>';
+        return;
+    }
+
+    var html = '';
+    msg.events.forEach(function(ev) {
+        var start = new Date(ev.start * 1000);
+        var timeStr = start.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+        var dateStr = start.toLocaleDateString([], {month: 'short', day: 'numeric'});
+        var durStr = ev.duration != null ? formatDuration(ev.duration) : 'ongoing…';
+        var cls = ev.duration == null ? 'history-item history-item--active' : 'history-item';
+        html += '<div class="' + cls + '">';
+        html += '<span class="history-time">' + dateStr + ' ' + timeStr + '</span>';
+        html += '<span class="history-dur">' + durStr + '</span>';
+        html += '</div>';
+    });
+    container.innerHTML = html;
+});
+
 function setConnStatus(state) {
     // state: 'connected' | 'disconnected' | 'reconnecting'
     var el = document.getElementById('connStatus');

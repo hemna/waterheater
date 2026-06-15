@@ -580,3 +580,50 @@ body {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
 }
+
+/* ─── Heating History ─── */
+
+.history-stats {
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+}
+
+.history-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.history-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.875rem;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item--active {
+    color: var(--warm);
+    font-weight: 500;
+}
+
+.history-time {
+    color: var(--text-muted);
+}
+
+.history-dur {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+.history-empty {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin: 0;
+}
