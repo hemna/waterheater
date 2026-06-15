@@ -790,12 +790,15 @@ class ControlNamespace(Namespace):
         enabled = bool(data.get("enabled", False))
         _ldr_auto_timer_enabled = enabled
         _save_ldr_settings({"auto_timer_enabled": enabled, "progressive_enabled": _ldr_progressive_enabled})
-        # If disabling while a timer is running, cancel it
         if not enabled:
+            # If disabling while a timer is running, cancel it
             with _ldr_timer_lock:
                 ev = _ldr_timer_cancel_event
             if ev:
                 ev.set()
+        elif _heater_on and _heater_on_since:
+            # Enabling while heater is already ON — start the timer now
+            _start_ldr_timer()
         _emit_heater_state()
         print(f"LDR auto-timer {'enabled' if enabled else 'disabled'}")
 
@@ -895,6 +898,23 @@ if __name__ == "__main__":
         _heater_on = _persisted["on"]
         _heater_on_since = _persisted["on_since"]
         print(f"Restored heater state: ON since {_heater_on_since}")
+        # Resume auto-timer if it was enabled (accounts for time already elapsed)
+        if _ldr_auto_timer_enabled:
+            elapsed = time.time() - _heater_on_since
+            remaining = (LDR_AUTO_TIMER_MINUTES * 60) - elapsed
+            if remaining > 0:
+                # Start a timer for the remaining time
+                _ldr_timer_cancel_event = threading.Event()
+                _ldr_timer_end_timestamp = time.time() + remaining
+                threading.Thread(target=_ldr_timer_worker, daemon=True).start()
+                print(f"Resumed LDR auto-timer: {remaining:.0f}s remaining")
+            else:
+                # Timer would have already fired — reduce now
+                _ldr_saved_temp = CURRENT_TEMPERATURE
+                set_temperature(LDR_REDUCED_TEMP)
+                print(f"LDR auto-timer overdue by {-remaining:.0f}s — reduced to {LDR_REDUCED_TEMP}°F")
+                if _ldr_progressive_enabled:
+                    _start_ldr_progressive()
     else:
         print("No persisted heater state (or heater was off)")
     if len(sys.argv) > 1 and sys.argv[1].startswith("--"):
