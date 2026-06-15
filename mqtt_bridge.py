@@ -22,12 +22,14 @@ MQTT_USERNAME = "waterheater"
 MQTT_PASSWORD = "waterheater"
 MQTT_CLIENT_ID = "waterheater-pi"
 MQTT_TOPIC_STATE = "waterheater/state"
+MQTT_TOPIC_HISTORY = "waterheater/history"
 MQTT_TOPIC_CMD = "waterheater/cmd/#"
 MQTT_HEARTBEAT_INTERVAL = 30  # seconds
 
 # Command topics → handler mapping (set by init)
 _cmd_handlers = {}
 _get_state_fn = None
+_get_history_fn = None
 _client = None
 _connected = False
 
@@ -38,11 +40,21 @@ def _on_connect(client, userdata, flags, reason_code, properties):
         print(f"MQTT: connected to {MQTT_BROKER}:{MQTT_PORT}")
         _connected = True
         client.subscribe(MQTT_TOPIC_CMD)
-        # Publish current state immediately on connect
+        # Publish current state and history immediately on connect
         publish_state()
+        # Defer history publish to allow init to complete
+        import threading
+        threading.Timer(2.0, _publish_initial_history).start()
     else:
         print(f"MQTT: connection failed (rc={reason_code})")
         _connected = False
+
+
+def _publish_initial_history():
+    """Publish history after connection is established."""
+    if _get_history_fn:
+        events, stats = _get_history_fn()
+        publish_history(events, stats)
 
 
 def _on_disconnect(client, userdata, flags, reason_code, properties):
@@ -93,6 +105,17 @@ def publish_state():
         print(f"MQTT: publish error: {e}")
 
 
+def publish_history(events: list, stats: dict):
+    """Publish heater history to MQTT. Called on heater transitions."""
+    if _client is None or not _connected:
+        return
+    try:
+        payload = json.dumps({"events": events, "stats": stats})
+        _client.publish(MQTT_TOPIC_HISTORY, payload, qos=1, retain=True)
+    except Exception as e:
+        print(f"MQTT: history publish error: {e}")
+
+
 def _heartbeat_loop():
     """Periodically publish state as a heartbeat."""
     while True:
@@ -100,15 +123,16 @@ def _heartbeat_loop():
         publish_state()
 
 
-def init(get_state_fn, cmd_handlers: dict):
+def init(get_state_fn, cmd_handlers: dict, get_history_fn=None):
     """Initialize the MQTT bridge.
 
     Args:
         get_state_fn: callable returning a dict with full current state
         cmd_handlers: dict mapping command names to handler callables
                       e.g. {"set_temperature": fn, "force_reset": fn, ...}
+        get_history_fn: callable returning (events_list, stats_dict) tuple
     """
-    global _client, _get_state_fn, _cmd_handlers
+    global _client, _get_state_fn, _cmd_handlers, _get_history_fn
 
     if mqtt is None:
         print("MQTT: paho-mqtt not available, bridge not started")
@@ -116,6 +140,7 @@ def init(get_state_fn, cmd_handlers: dict):
 
     _get_state_fn = get_state_fn
     _cmd_handlers = cmd_handlers
+    _get_history_fn = get_history_fn
 
     _client = mqtt.Client(
         client_id=MQTT_CLIENT_ID,

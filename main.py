@@ -222,6 +222,12 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
 
     _save_heater_state()
     _emit_heater_state()
+    # Publish history update to MQTT and SocketIO
+    mqtt_bridge.publish_history(heater_history.get_history(20), heater_history.get_stats())
+    _safe_emit("heater_history", {
+        "events": heater_history.get_history(20),
+        "stats": heater_history.get_stats(),
+    })
 
     if confirmed is True:
         _cancel_off_timer()
@@ -1055,6 +1061,7 @@ if __name__ == "__main__":
                 "set_start_timer": _mqtt_set_start_timer,
                 "cancel_start_timer": _mqtt_cancel_start_timer,
             },
+            get_history_fn=lambda: (heater_history.get_history(20), heater_history.get_stats()),
         )
 
         def _mqtt_set_progressive_floor(data):
