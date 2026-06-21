@@ -630,6 +630,7 @@ def _get_full_state() -> dict:
         "heater_on": on,
         "heater_on_since": on_since,
         "auto_timer_enabled": _ldr_auto_timer_enabled,
+        "auto_timer_minutes": LDR_AUTO_TIMER_MINUTES,
         "progressive_enabled": _ldr_progressive_enabled,
         "progressive_active": _ldr_progressive_active,
         "progressive_min_temp": _ldr_progressive_min_temp,
