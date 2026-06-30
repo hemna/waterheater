@@ -15,6 +15,7 @@ let heaterDurationInterval = null;
 
 // Chart state
 let currentChartPeriod = 'day';
+let currentChartOffset = 0;
 
 function formatCountdown(secondsLeft) {
     if (secondsLeft <= 0) return '0:00';
@@ -227,7 +228,7 @@ socket.on('heater_history', function(msg) {
 
     // Refresh chart when history updates
     if (typeof currentChartPeriod !== 'undefined') {
-        socket.emit('get_chart_data', { period: currentChartPeriod });
+        socket.emit('get_chart_data', { period: currentChartPeriod, offset: currentChartOffset });
     }
 });
 
@@ -241,6 +242,20 @@ socket.on('chart_data', function(msg) {
     chartInstance.data.labels = msg.data.labels;
     chartInstance.data.datasets[0].data = msg.data.values;
     chartInstance.update();
+    // Update title label
+    var titleEl = document.getElementById('chartTitle');
+    if (titleEl && msg.data.title) {
+        titleEl.textContent = msg.data.title;
+    }
+    // Update offset from server
+    if (msg.offset != null) {
+        currentChartOffset = msg.offset;
+    }
+    // Disable "Next" button when at current period (offset 0)
+    var nextBtn = document.getElementById('chartNext');
+    if (nextBtn) {
+        nextBtn.disabled = (currentChartOffset >= 0);
+    }
 });
 
 function setConnStatus(state) {
@@ -444,21 +459,38 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function setChartPeriod(period) {
         currentChartPeriod = period;
+        currentChartOffset = 0;
         document.querySelectorAll('.btn-chart-toggle').forEach(function(btn) {
             btn.classList.remove('active');
         });
         var id = 'chart' + period.charAt(0).toUpperCase() + period.slice(1);
         var activeBtn = document.getElementById(id);
         if (activeBtn) activeBtn.classList.add('active');
-        socket.emit('get_chart_data', { period: period });
+        socket.emit('get_chart_data', { period: period, offset: 0 });
     }
 
     var chartDayBtn = document.getElementById('chartDay');
+    var chartWeekBtn = document.getElementById('chartWeek');
     var chartMonthBtn = document.getElementById('chartMonth');
     var chartYearBtn = document.getElementById('chartYear');
     if (chartDayBtn) chartDayBtn.addEventListener('click', function() { setChartPeriod('day'); });
+    if (chartWeekBtn) chartWeekBtn.addEventListener('click', function() { setChartPeriod('week'); });
     if (chartMonthBtn) chartMonthBtn.addEventListener('click', function() { setChartPeriod('month'); });
     if (chartYearBtn) chartYearBtn.addEventListener('click', function() { setChartPeriod('year'); });
+
+    // Prev/Next navigation
+    var chartPrevBtn = document.getElementById('chartPrev');
+    var chartNextBtn = document.getElementById('chartNext');
+    if (chartPrevBtn) chartPrevBtn.addEventListener('click', function() {
+        currentChartOffset--;
+        socket.emit('get_chart_data', { period: currentChartPeriod, offset: currentChartOffset });
+    });
+    if (chartNextBtn) chartNextBtn.addEventListener('click', function() {
+        if (currentChartOffset < 0) {
+            currentChartOffset++;
+            socket.emit('get_chart_data', { period: currentChartPeriod, offset: currentChartOffset });
+        }
+    });
 
     initChart();
 });

@@ -689,13 +689,17 @@ class ControlNamespace(Namespace):
         })
 
     def on_get_chart_data(self, data):
-        """Client requests chart data for a given period (day/month/year)."""
+        """Client requests chart data for a given period (day/week/month/year) and offset."""
         period = data.get("period", "day") if data else "day"
-        if period not in ("day", "month", "year"):
+        if period not in ("day", "week", "month", "year"):
             period = "day"
+        offset = int(data.get("offset", 0)) if data else 0
+        # Clamp offset to prevent absurd ranges
+        offset = max(-50, min(0, offset))
         _safe_emit("chart_data", {
             "period": period,
-            "data": heater_history.get_chart_data(period),
+            "offset": offset,
+            "data": heater_history.get_chart_data(period, offset),
         })
 
     def on_message(self, sid, data):
