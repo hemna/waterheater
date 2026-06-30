@@ -1060,6 +1060,15 @@ if __name__ == "__main__":
                 ev.set()
             _emit_start_timer_state()
 
+        def _mqtt_get_chart_data(data):
+            period = data.get("period", "day") if data else "day"
+            if period not in ("day", "week", "month", "year"):
+                period = "day"
+            offset = int(data.get("offset", 0)) if data else 0
+            offset = max(-50, min(0, offset))
+            chart_data = heater_history.get_chart_data(period, offset)
+            mqtt_bridge.publish_chart_data(period, offset, chart_data)
+
         mqtt_bridge.init(
             get_state_fn=_get_full_state,
             cmd_handlers={
@@ -1075,6 +1084,7 @@ if __name__ == "__main__":
                 "set_progressive_floor": lambda data: _mqtt_set_progressive_floor(data),
                 "set_start_timer": _mqtt_set_start_timer,
                 "cancel_start_timer": _mqtt_cancel_start_timer,
+                "get_chart_data": _mqtt_get_chart_data,
             },
             get_history_fn=lambda: (heater_history.get_history(20), heater_history.get_stats()),
         )

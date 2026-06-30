@@ -23,6 +23,7 @@ MQTT_PASSWORD = "waterheater"
 MQTT_CLIENT_ID = "waterheater-pi"
 MQTT_TOPIC_STATE = "waterheater/state"
 MQTT_TOPIC_HISTORY = "waterheater/history"
+MQTT_TOPIC_CHART_DATA = "waterheater/chart_data"
 MQTT_TOPIC_CMD = "waterheater/cmd/#"
 MQTT_HEARTBEAT_INTERVAL = 30  # seconds
 
@@ -114,6 +115,17 @@ def publish_history(events: list, stats: dict):
         _client.publish(MQTT_TOPIC_HISTORY, payload, qos=1, retain=True)
     except Exception as e:
         print(f"MQTT: history publish error: {e}")
+
+
+def publish_chart_data(period: str, offset: int, data: dict):
+    """Publish chart data response to MQTT."""
+    if _client is None or not _connected:
+        return
+    try:
+        payload = json.dumps({"period": period, "offset": offset, "data": data})
+        _client.publish(MQTT_TOPIC_CHART_DATA, payload, qos=1, retain=True)
+    except Exception as e:
+        print(f"MQTT: chart_data publish error: {e}")
 
 
 def _heartbeat_loop():
