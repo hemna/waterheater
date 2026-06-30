@@ -13,6 +13,9 @@ let currentResetDuration = null;
 let heaterOnSince = null;  // Unix timestamp (seconds) or null
 let heaterDurationInterval = null;
 
+// Chart state
+let currentChartPeriod = 'day';
+
 function formatCountdown(secondsLeft) {
     if (secondsLeft <= 0) return '0:00';
     const m = Math.floor(secondsLeft / 60);
@@ -221,6 +224,23 @@ socket.on('heater_history', function(msg) {
         html += '</div>';
     });
     container.innerHTML = html;
+
+    // Refresh chart when history updates
+    if (typeof currentChartPeriod !== 'undefined') {
+        socket.emit('get_chart_data', { period: currentChartPeriod });
+    }
+});
+
+// ── Usage Chart data handler ──────────────────────────────────────────
+socket.on('chart_data', function(msg) {
+    var canvas = document.getElementById('usageChart');
+    if (!canvas) return;
+    // Chart instance is stored on the canvas by Chart.js
+    var chartInstance = Chart.getChart(canvas);
+    if (!chartInstance) return;
+    chartInstance.data.labels = msg.data.labels;
+    chartInstance.data.datasets[0].data = msg.data.values;
+    chartInstance.update();
 });
 
 function setConnStatus(state) {
@@ -365,4 +385,80 @@ document.addEventListener('DOMContentLoaded', function() {
             socket.emit('set_progressive_floor', {'temperature': temp});
         });
     }
+
+    // ── Usage Chart ───────────────────────────────────────────────────────
+    var usageChart = null;
+
+    function initChart() {
+        var ctx = document.getElementById('usageChart');
+        if (!ctx) return;
+        usageChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Heating (min)',
+                    data: [],
+                    backgroundColor: 'rgba(239, 108, 0, 0.6)',
+                    borderColor: 'rgba(239, 108, 0, 1)',
+                    borderWidth: 1,
+                    borderRadius: 3,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                var val = context.parsed.y;
+                                if (val >= 60) {
+                                    var h = Math.floor(val / 60);
+                                    var m = Math.round(val % 60);
+                                    return h + 'h ' + m + 'm';
+                                }
+                                return Math.round(val) + ' min';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Minutes' },
+                        grid: { color: 'rgba(255,255,255,0.06)' },
+                        ticks: { color: '#aaa' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#aaa', maxRotation: 0 }
+                    }
+                }
+            }
+        });
+        // Request initial data
+        socket.emit('get_chart_data', { period: currentChartPeriod });
+    }
+
+    function setChartPeriod(period) {
+        currentChartPeriod = period;
+        document.querySelectorAll('.btn-chart-toggle').forEach(function(btn) {
+            btn.classList.remove('active');
+        });
+        var id = 'chart' + period.charAt(0).toUpperCase() + period.slice(1);
+        var activeBtn = document.getElementById(id);
+        if (activeBtn) activeBtn.classList.add('active');
+        socket.emit('get_chart_data', { period: period });
+    }
+
+    var chartDayBtn = document.getElementById('chartDay');
+    var chartMonthBtn = document.getElementById('chartMonth');
+    var chartYearBtn = document.getElementById('chartYear');
+    if (chartDayBtn) chartDayBtn.addEventListener('click', function() { setChartPeriod('day'); });
+    if (chartMonthBtn) chartMonthBtn.addEventListener('click', function() { setChartPeriod('month'); });
+    if (chartYearBtn) chartYearBtn.addEventListener('click', function() { setChartPeriod('year'); });
+
+    initChart();
 });

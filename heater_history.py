@@ -74,6 +74,97 @@ def get_history(limit: int = 20) -> list:
     return events
 
 
+def get_chart_data(period: str = "day") -> dict:
+    """Return aggregated heating minutes for charting.
+
+    period: 'day' (hourly buckets for today),
+            'month' (daily buckets for this month),
+            'year' (monthly buckets for this year).
+    Returns: {"labels": [...], "values": [...]} where values are minutes.
+    """
+    import datetime
+
+    now = datetime.datetime.now()
+    with _lock:
+        completed = [e for e in _history if e["duration"] is not None]
+
+    if period == "day":
+        # 24 hourly buckets for today
+        start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        buckets = [0.0] * 24
+        labels = [f"{h}:00" for h in range(24)]
+        for e in completed:
+            ev_start = datetime.datetime.fromtimestamp(e["start"])
+            ev_end = datetime.datetime.fromtimestamp(e["end"])
+            if ev_end < start_of_day:
+                continue
+            # Clip to today
+            clipped_start = max(ev_start, start_of_day)
+            clipped_end = min(ev_end, now)
+            if clipped_start >= clipped_end:
+                continue
+            # Distribute across hour buckets
+            cur = clipped_start
+            while cur < clipped_end:
+                hour_end = cur.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+                seg_end = min(hour_end, clipped_end)
+                minutes = (seg_end - cur).total_seconds() / 60.0
+                buckets[cur.hour] += minutes
+                cur = seg_end
+        return {"labels": labels, "values": [round(v, 1) for v in buckets]}
+
+    elif period == "month":
+        # Daily buckets for current month
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        import calendar
+        days_in_month = calendar.monthrange(now.year, now.month)[1]
+        buckets = [0.0] * days_in_month
+        labels = [str(d) for d in range(1, days_in_month + 1)]
+        for e in completed:
+            ev_start = datetime.datetime.fromtimestamp(e["start"])
+            ev_end = datetime.datetime.fromtimestamp(e["end"])
+            if ev_end < start_of_month:
+                continue
+            clipped_start = max(ev_start, start_of_month)
+            clipped_end = min(ev_end, now)
+            if clipped_start >= clipped_end:
+                continue
+            cur = clipped_start
+            while cur < clipped_end:
+                day_end = (cur + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                seg_end = min(day_end, clipped_end)
+                minutes = (seg_end - cur).total_seconds() / 60.0
+                buckets[cur.day - 1] += minutes
+                cur = seg_end
+        return {"labels": labels, "values": [round(v, 1) for v in buckets]}
+
+    else:  # year
+        # Monthly buckets for current year
+        start_of_year = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        buckets = [0.0] * 12
+        labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        for e in completed:
+            ev_start = datetime.datetime.fromtimestamp(e["start"])
+            ev_end = datetime.datetime.fromtimestamp(e["end"])
+            if ev_end < start_of_year:
+                continue
+            clipped_start = max(ev_start, start_of_year)
+            clipped_end = min(ev_end, now)
+            if clipped_start >= clipped_end:
+                continue
+            cur = clipped_start
+            while cur < clipped_end:
+                import calendar as cal
+                days_in_m = cal.monthrange(cur.year, cur.month)[1]
+                month_end = cur.replace(day=days_in_m, hour=23, minute=59, second=59, microsecond=999999) + datetime.timedelta(microseconds=1)
+                seg_end = min(month_end, clipped_end)
+                minutes = (seg_end - cur).total_seconds() / 60.0
+                buckets[cur.month - 1] += minutes
+                cur = seg_end
+        return {"labels": labels, "values": [round(v, 1) for v in buckets]}
+
+
 def get_stats() -> dict:
     """Return summary statistics."""
     with _lock:

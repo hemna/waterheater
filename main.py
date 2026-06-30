@@ -688,6 +688,16 @@ class ControlNamespace(Namespace):
             "stats": heater_history.get_stats(),
         })
 
+    def on_get_chart_data(self, data):
+        """Client requests chart data for a given period (day/month/year)."""
+        period = data.get("period", "day") if data else "day"
+        if period not in ("day", "month", "year"):
+            period = "day"
+        _safe_emit("chart_data", {
+            "period": period,
+            "data": heater_history.get_chart_data(period),
+        })
+
     def on_message(self, sid, data):
         print(f"on_message: Received message: {data}")
 

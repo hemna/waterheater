@@ -627,3 +627,43 @@ body {
     font-style: italic;
     margin: 0;
 }
+
+/* ── Usage Chart ─────────────────────────────────────────────────────── */
+.card-chart {
+    margin-bottom: 1rem;
+}
+
+.chart-toggle {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.btn-chart-toggle {
+    padding: 0.35rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.btn-chart-toggle:hover {
+    border-color: var(--warm);
+    color: var(--warm);
+}
+
+.btn-chart-toggle.active {
+    background: var(--warm);
+    border-color: var(--warm);
+    color: #fff;
+}
+
+.chart-container {
+    position: relative;
+    height: 200px;
+    width: 100%;
+}
