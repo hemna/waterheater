@@ -14,7 +14,9 @@ import click
 import RPi.GPIO as GPIO
 from RpiMotorLib import RpiMotorLib
 import time
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from werkzeug.security import check_password_hash
+from functools import wraps
 import threading
 from flask_socketio import SocketIO, Namespace
 import json
@@ -51,6 +53,7 @@ LDR_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ld
 
 TEMPERATURE_FILE = "/tmp/current_temperature.json"
 HEATER_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heater_state.json")
+AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.json")
 
 RESET_TEMPERATURE = 108  # default temperature to reset to after timer
 WEB_PORT = 80
@@ -154,6 +157,20 @@ def _load_heater_state() -> dict:
             return {**defaults, **json.load(f)}
     except Exception:
         return defaults
+
+
+def _load_auth() -> str:
+    """Load password hash from auth.json. Returns empty string if missing."""
+    if not os.path.exists(AUTH_FILE):
+        return ""
+    try:
+        with open(AUTH_FILE, "r") as f:
+            return json.load(f).get("password_hash", "")
+    except Exception:
+        return ""
+
+
+_PASSWORD_HASH = _load_auth()
 
 
 def _save_heater_state() -> None:
@@ -650,6 +667,16 @@ flask_app = Flask(
     static_folder="web/static",
     template_folder="web/templates",
 )
+flask_app.secret_key = os.environ.get("WATERHEATER_SECRET_KEY", "wh-session-key-rpi-2024")
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if _PASSWORD_HASH and not session.get("authenticated"):
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
 
 
 def init_flask():
@@ -665,6 +692,10 @@ def init_flask():
 class ControlNamespace(Namespace):
     def on_connect(self):
         global sio
+        # Reject unauthenticated SocketIO connections
+        if _PASSWORD_HASH and not session.get("authenticated"):
+            print("SocketIO connection rejected: not authenticated")
+            return False
         print("Client connected")
         _safe_emit("motor_status", {"message": "Connected to server"})
         _emit_timer_state()
@@ -883,7 +914,27 @@ class ControlNamespace(Namespace):
         print("Progressive cooling stopped manually")
 
 
+@flask_app.route("/login", methods=["GET", "POST"])
+def login():
+    if not _PASSWORD_HASH:
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if check_password_hash(_PASSWORD_HASH, password):
+            session["authenticated"] = True
+            return redirect(url_for("index"))
+        return render_template("login.html", error="Incorrect password")
+    return render_template("login.html", error=None)
+
+
+@flask_app.route("/logout")
+def logout():
+    session.pop("authenticated", None)
+    return redirect(url_for("login"))
+
+
 @flask_app.route("/")
+@login_required
 def index():
     global CURRENT_TEMPERATURE
     print(f"Index page requested, current temperature: {CURRENT_TEMPERATURE}")
