@@ -6,3 +6,4 @@ ldr_settings.json
 heater_history.json
 heater_state.json
 start.sh
+auth.json
