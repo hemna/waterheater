@@ -146,6 +146,19 @@
                         <p id="heaterLabel" class="heater-label">Heater OFF</p>
                         <p id="heaterDuration" class="heater-duration" role="status" aria-live="polite" hidden></p>
                         <p id="offTimerCountdown" class="off-timer-countdown" role="status" aria-live="polite" hidden></p>
+                        <div id="offTimerSetting" class="off-timer-setting mt-1">
+                            <label class="timer-label" for="offTimerMinutes">Off-timer reset delay:</label>
+                            <select id="offTimerMinutes" class="form-select timer-select" aria-label="Off-timer minutes" style="width: auto; display: inline-block;">
+                                <option value="1">1 min</option>
+                                <option value="2">2 min</option>
+                                <option value="3">3 min</option>
+                                <option value="5" selected>5 min</option>
+                                <option value="10">10 min</option>
+                                <option value="15">15 min</option>
+                                <option value="30">30 min</option>
+                                <option value="60">60 min</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div class="temp-hero">
