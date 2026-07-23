@@ -90,7 +90,8 @@ _ldr_progressive_lock = threading.Lock()
 _heater_state_lock = threading.Lock()  # protects _heater_on and _heater_on_since
 
 # Off-timer: reset to base temperature after heater has been off for N minutes
-HEATER_OFF_RESET_MINUTES = 5
+HEATER_OFF_RESET_MINUTES_DEFAULT = 5
+_heater_off_reset_minutes = HEATER_OFF_RESET_MINUTES_DEFAULT  # mutable, persisted
 _off_timer_cancel_event = None
 _off_timer_end_timestamp = None  # Unix time when off-timer will fire, or None
 _off_timer_lock = threading.Lock()
@@ -128,7 +129,7 @@ def _check_ldr_debounce(buffer: list, heater_on_level: int):
 
 def _load_ldr_settings(path: str = LDR_SETTINGS_FILE) -> dict:
     """Load LDR settings from JSON file. Returns defaults if missing or corrupt."""
-    defaults = {"auto_timer_enabled": False, "progressive_enabled": False, "progressive_min_temp": LDR_PROGRESSIVE_MIN_TEMP_DEFAULT}
+    defaults = {"auto_timer_enabled": False, "progressive_enabled": False, "progressive_min_temp": LDR_PROGRESSIVE_MIN_TEMP_DEFAULT, "off_reset_minutes": HEATER_OFF_RESET_MINUTES_DEFAULT}
     if not os.path.exists(path):
         return defaults
     try:
@@ -202,6 +203,7 @@ def _emit_heater_state():
             "progressive_enabled": _ldr_progressive_enabled,
             "progressive_active": _ldr_progressive_active,
             "progressive_min_temp": _ldr_progressive_min_temp,
+            "off_reset_minutes": _heater_off_reset_minutes,
         },
     )
     mqtt_bridge.publish_state()
@@ -417,10 +419,10 @@ def _start_off_timer():
         if _off_timer_cancel_event:
             _off_timer_cancel_event.set()
         _off_timer_cancel_event = threading.Event()
-        _off_timer_end_timestamp = time.time() + HEATER_OFF_RESET_MINUTES * 60
+        _off_timer_end_timestamp = time.time() + _heater_off_reset_minutes * 60
     _emit_off_timer_state()
     threading.Thread(target=_off_timer_worker, daemon=True).start()
-    print(f"Off-timer started: will reset to {RESET_TEMPERATURE}°F in {HEATER_OFF_RESET_MINUTES} min if heater stays off")
+    print(f"Off-timer started: will reset to {RESET_TEMPERATURE}°F in {_heater_off_reset_minutes} min if heater stays off")
 
 
 def _cancel_off_timer():
@@ -443,7 +445,7 @@ def _off_timer_worker():
         cancel_ev = _off_timer_cancel_event
     if cancel_ev is None:
         return
-    duration_seconds = HEATER_OFF_RESET_MINUTES * 60
+    duration_seconds = _heater_off_reset_minutes * 60
     if cancel_ev.wait(timeout=duration_seconds):
         # Cancelled — heater turned back on
         return
@@ -452,7 +454,7 @@ def _off_timer_worker():
         _off_timer_end_timestamp = None
     if not _heater_on:
         set_temperature(RESET_TEMPERATURE)
-        print(f"Off-timer fired: heater off for {HEATER_OFF_RESET_MINUTES} min, reset to {RESET_TEMPERATURE}°F")
+        print(f"Off-timer fired: heater off for {_heater_off_reset_minutes} min, reset to {RESET_TEMPERATURE}°F")
     _emit_off_timer_state()
 
 
@@ -870,6 +872,21 @@ class ControlNamespace(Namespace):
         _emit_heater_state()
         print(f"LDR progressive cooling {'enabled' if enabled else 'disabled'}")
 
+    def on_set_off_timer_minutes(self, data):
+        """Set the off-timer reset delay in minutes. Persists to file."""
+        global _heater_off_reset_minutes
+        minutes = int(data.get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT))
+        minutes = max(1, min(60, minutes))  # clamp 1-60
+        _heater_off_reset_minutes = minutes
+        _save_ldr_settings({
+            "auto_timer_enabled": _ldr_auto_timer_enabled,
+            "progressive_enabled": _ldr_progressive_enabled,
+            "progressive_min_temp": _ldr_progressive_min_temp,
+            "off_reset_minutes": minutes,
+        })
+        _emit_heater_state()
+        print(f"Off-timer minutes set to {minutes}")
+
     def on_set_progressive_floor(self, data):
         """Set the progressive cooling floor temperature. Persists to file."""
         global _ldr_progressive_min_temp
@@ -962,6 +979,7 @@ if __name__ == "__main__":
     heater_history.init()
     settings = _load_ldr_settings()
     _ldr_auto_timer_enabled = settings["auto_timer_enabled"]
+    _heater_off_reset_minutes = settings.get("off_reset_minutes", HEATER_OFF_RESET_MINUTES_DEFAULT)
     _ldr_progressive_enabled = settings["progressive_enabled"]
     _ldr_progressive_min_temp = settings.get("progressive_min_temp", LDR_PROGRESSIVE_MIN_TEMP_DEFAULT)
     # Restore heater on_since from disk so restarts don't reset the duration
@@ -1120,6 +1138,19 @@ if __name__ == "__main__":
             chart_data = heater_history.get_chart_data(period, offset)
             mqtt_bridge.publish_chart_data(period, offset, chart_data)
 
+        def _mqtt_set_off_timer_minutes(data):
+            global _heater_off_reset_minutes
+            minutes = int(data.get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT))
+            minutes = max(1, min(60, minutes))
+            _heater_off_reset_minutes = minutes
+            _save_ldr_settings({
+                "auto_timer_enabled": _ldr_auto_timer_enabled,
+                "progressive_enabled": _ldr_progressive_enabled,
+                "progressive_min_temp": _ldr_progressive_min_temp,
+                "off_reset_minutes": minutes,
+            })
+            _emit_heater_state()
+
         mqtt_bridge.init(
             get_state_fn=_get_full_state,
             cmd_handlers={
@@ -1131,6 +1162,7 @@ if __name__ == "__main__":
                 "start_progressive": _mqtt_start_progressive,
                 "stop_progressive": _mqtt_stop_progressive,
                 "set_ldr_auto_timer": _mqtt_set_ldr_auto_timer,
+                "set_off_timer_minutes": _mqtt_set_off_timer_minutes,
                 "set_ldr_progressive": _mqtt_set_ldr_progressive,
                 "set_progressive_floor": lambda data: _mqtt_set_progressive_floor(data),
                 "set_start_timer": _mqtt_set_start_timer,
