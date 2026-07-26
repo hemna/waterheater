@@ -659,6 +659,7 @@ def _get_full_state() -> dict:
         "start_timer_intermediate_temp": intermediate_temp,
         "start_timer_reset_duration": reset_duration,
         "ldr_timer_end_timestamp": _ldr_timer_end_timestamp,
+        "off_timer_end_timestamp": _off_timer_end_timestamp,
         "history_stats": heater_history.get_stats(),
     }
 
