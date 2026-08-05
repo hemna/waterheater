@@ -1,0 +1,12 @@
+#!/bin/bash
+# Disable WiFi power management on connect.
+# Install to: /etc/NetworkManager/dispatcher.d/99-wifi-powersave-off
+# NetworkManager runs dispatcher scripts when interface state changes.
+
+IFACE="$1"
+ACTION="$2"
+
+if [ "$IFACE" = "wlan0" ] && [ "$ACTION" = "up" ]; then
+    /sbin/iwconfig wlan0 power off
+    logger -t "nm-dispatcher" "Disabled WiFi power management on wlan0"
+fi
