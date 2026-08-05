@@ -14,7 +14,7 @@ import click
 import RPi.GPIO as GPIO
 from RpiMotorLib import RpiMotorLib
 import time
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash
 from functools import wraps
 import threading

@@ -1,10 +1,8 @@
 """Tests for LDR heater detection logic."""
 import json
-import os
 import sys
-import tempfile
 import threading
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 # Mock hardware and unavailable modules before importing main
 sys.modules['RPi'] = MagicMock()
@@ -70,7 +68,7 @@ class TestLdrStateTransitions:
         main._heater_on = False
         main._ldr_auto_timer_enabled = False
         with patch.object(main, 'sio', MagicMock()), \
-             patch('main._start_ldr_timer') as mock_start_timer:
+             patch('main._start_ldr_timer'):
             main._ldr_poll_tick(0, [0, 0, 0])
         assert main._heater_on is True
 
