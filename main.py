@@ -14,7 +14,7 @@ import click
 import RPi.GPIO as GPIO
 from RpiMotorLib import RpiMotorLib
 import time
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for
 from werkzeug.security import check_password_hash
 from functools import wraps
 import threading
@@ -912,10 +912,13 @@ class ControlNamespace(Namespace):
         if ev:
             ev.set()
         _emit_ldr_timer_state()
-        # Save current temp and reduce
+        # Save current temp and reduce (only lower, never raise toward LDR_REDUCED_TEMP)
         _ldr_saved_temp = CURRENT_TEMPERATURE
-        set_temperature(LDR_REDUCED_TEMP)
-        print(f"Progressive now: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
+        if CURRENT_TEMPERATURE > LDR_REDUCED_TEMP:
+            set_temperature(LDR_REDUCED_TEMP)
+            print(f"Progressive now: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
+        else:
+            print(f"Progressive now: saved {_ldr_saved_temp}°F, already at/below {LDR_REDUCED_TEMP}°F, cooling from current")
         # Start progressive cooling
         _start_ldr_progressive()
         _emit_heater_state()
