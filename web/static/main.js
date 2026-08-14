@@ -144,7 +144,7 @@ function updateOffTimerDisplay(endTimestamp) {
         if (!currentOffTimerEnd) return;
         const now = Date.now() / 1000;
         const left = Math.max(0, currentOffTimerEnd - now);
-        el.textContent = 'Resetting to 108°F in ' + formatCountdown(left);
+        el.textContent = 'Heater off: reset to 108°F in ' + formatCountdown(left);
         if (left <= 0 && offTimerCountdownInterval) {
             clearInterval(offTimerCountdownInterval);
             offTimerCountdownInterval = null;
