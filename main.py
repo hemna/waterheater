@@ -140,10 +140,15 @@ def _load_ldr_settings(path: str = LDR_SETTINGS_FILE) -> dict:
 
 
 def _save_ldr_settings(settings: dict, path: str = LDR_SETTINGS_FILE) -> None:
-    """Persist LDR settings to JSON file."""
+    """Persist LDR settings to JSON file (read-merge-write to avoid dropping keys)."""
     try:
+        existing = {}
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                existing = json.load(f)
+        existing.update(settings)
         with open(path, "w") as f:
-            json.dump(settings, f)
+            json.dump(existing, f)
     except Exception as e:
         print(f"Failed to save LDR settings: {e}")
 
@@ -250,12 +255,19 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
 
     if confirmed is True:
         _cancel_off_timer()
-        if _ldr_auto_timer_enabled:
+        if (
+            _ldr_progressive_enabled
+            and not _ldr_progressive_active
+            and CURRENT_TEMPERATURE != RESET_TEMPERATURE
+        ):
+            _start_ldr_progressive()
+        elif _ldr_auto_timer_enabled:
             _start_ldr_timer()
     else:
         # Start off-timer: reset to base temp after HEATER_OFF_RESET_MINUTES
-        # (only if not already at base temperature)
-        if CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+        # (only if not already at base temperature AND progressive wasn't actively cooling)
+        progressive_was_active = _ldr_progressive_active
+        if CURRENT_TEMPERATURE != RESET_TEMPERATURE and not progressive_was_active:
             _start_off_timer()
         # Cancel LDR timer if still running
         with _ldr_timer_lock:
@@ -265,13 +277,20 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
             ev.set()
         _emit_ldr_timer_state()
         # Cancel progressive cooling if still running
+        progressive_was_active = _ldr_progressive_active
         with _ldr_progressive_lock:
             pev = _ldr_progressive_cancel_event
         if pev:
             pev.set()
-        # Restore temperature if it was reduced
-        if _ldr_saved_temp is not None:
+        # Restore temperature only if progressive cooling was NOT actively running.
+        # If progressive was active, the temp was intentionally lowered — restoring
+        # would undo the cooling and re-ignite the burner.
+        if progressive_was_active:
+            _ldr_saved_temp = None
+            print(f"Progressive was active — skipping restore, staying at {CURRENT_TEMPERATURE}°F")
+        elif _ldr_saved_temp is not None:
             set_temperature(_ldr_saved_temp)
+            print(f"Restored temperature to {_ldr_saved_temp}°F")
             _ldr_saved_temp = None
 
 
@@ -458,6 +477,15 @@ def _off_timer_worker():
     _emit_off_timer_state()
 
 
+def _resume_off_timer_if_needed():
+    """Start the off-timer after service restart when heater is already off."""
+    if not _heater_on and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+        _start_off_timer()
+        print(
+            f"Off-timer resumed after restart: will reset to {RESET_TEMPERATURE}°F in {_heater_off_reset_minutes} min if heater stays off"
+        )
+
+
 def motor_control(steps, clockwise=True, steptype="Full"):
     """Clockwise to increase temperature. Thread-safe via _motor_lock."""
     print(f"Move motor {steps} clockwise? {clockwise} type {steptype}")
@@ -559,6 +587,20 @@ def _emit_timer_state():
     mqtt_bridge.publish_state()
 
 
+def _cancel_reset_timer():
+    """Cancel the pending reset-to-base timer, if one is active."""
+    global _timer_end_timestamp, _timer_cancel_event
+    with _timer_lock:
+        ev = _timer_cancel_event
+        had_timer = _timer_end_timestamp is not None or ev is not None
+        _timer_end_timestamp = None
+        _timer_cancel_event = None
+    if ev:
+        ev.set()
+    if had_timer:
+        _emit_timer_state()
+
+
 def _emit_start_timer_state():
     """Broadcast current start timer state so clients can show accurate countdown."""
     with _start_timer_lock:
@@ -626,7 +668,12 @@ def _timer_worker():
         if time.time() >= end:
             with _timer_lock:
                 _timer_end_timestamp = None
-            set_temperature(RESET_TEMPERATURE)
+            if _ldr_progressive_active:
+                print(
+                    f"Reset timer expired during progressive cooling; skipping reset to {RESET_TEMPERATURE}°F"
+                )
+            else:
+                set_temperature(RESET_TEMPERATURE)
             _emit_timer_state()
             return
 
@@ -782,6 +829,10 @@ class ControlNamespace(Namespace):
     def on_set_timer(self, data):
         """Start a timer to reset temperature to RESET_TEMPERATURE after duration_minutes."""
         global _timer_end_timestamp, _timer_cancel_event
+        if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+            _cancel_reset_timer()
+            print("Timer ignored: progressive cooling owns the lowered temperature")
+            return
         duration_minutes = float(data.get("duration_minutes", 30))
         duration_seconds = max(1, duration_minutes * 60)
         with _timer_lock:
@@ -905,6 +956,7 @@ class ControlNamespace(Namespace):
     def on_start_progressive_now(self, data):
         """Immediately reduce to LDR_REDUCED_TEMP and start progressive cooling."""
         global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
+        _cancel_reset_timer()
         # Cancel any running LDR auto-timer since we're doing it manually
         with _ldr_timer_lock:
             ev = _ldr_timer_cancel_event
@@ -1011,6 +1063,7 @@ if __name__ == "__main__":
                     _start_ldr_progressive()
     else:
         print("No persisted heater state (or heater was off)")
+    _resume_off_timer_if_needed()
     if len(sys.argv) > 1 and sys.argv[1].startswith("--"):
         main()
     else:
@@ -1037,6 +1090,10 @@ if __name__ == "__main__":
 
         def _mqtt_set_timer(data):
             global _timer_end_timestamp, _timer_cancel_event
+            if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+                _cancel_reset_timer()
+                print("MQTT: Timer ignored: progressive cooling owns the lowered temperature")
+                return
             duration_minutes = float(data.get("duration_minutes", 30))
             duration_seconds = max(1, duration_minutes * 60)
             with _timer_lock:
@@ -1061,6 +1118,7 @@ if __name__ == "__main__":
 
         def _mqtt_start_progressive(data):
             global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
+            _cancel_reset_timer()
             with _ldr_timer_lock:
                 ev = _ldr_timer_cancel_event
                 _ldr_timer_end_timestamp = None
@@ -1068,7 +1126,9 @@ if __name__ == "__main__":
                 ev.set()
             _emit_ldr_timer_state()
             _ldr_saved_temp = CURRENT_TEMPERATURE
-            set_temperature(LDR_REDUCED_TEMP)
+            # Only lower, never raise toward LDR_REDUCED_TEMP (same as SocketIO handler)
+            if CURRENT_TEMPERATURE > LDR_REDUCED_TEMP:
+                set_temperature(LDR_REDUCED_TEMP)
             _start_ldr_progressive()
             _emit_heater_state()
 
