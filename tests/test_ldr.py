@@ -271,3 +271,12 @@ class TestOffTimerResume:
             main._resume_off_timer_if_needed()
 
         mock_start_off_timer.assert_called_once()
+
+
+class TestFullStatePayload:
+    def test_includes_off_reset_minutes_for_mqtt_clients(self):
+        main._heater_off_reset_minutes = 15
+
+        state = main._get_full_state()
+
+        assert state["off_reset_minutes"] == 15

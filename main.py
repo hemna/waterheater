@@ -700,6 +700,7 @@ def _get_full_state() -> dict:
         "progressive_enabled": _ldr_progressive_enabled,
         "progressive_active": _ldr_progressive_active,
         "progressive_min_temp": _ldr_progressive_min_temp,
+        "off_reset_minutes": _heater_off_reset_minutes,
         "timer_end_timestamp": timer_end,
         "reset_temperature": RESET_TEMPERATURE,
         "start_timer_end_timestamp": start_timer_end,
