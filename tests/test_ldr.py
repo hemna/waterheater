@@ -11,6 +11,8 @@ sys.modules['RpiMotorLib'] = MagicMock()
 sys.modules['RpiMotorLib.RpiMotorLib'] = MagicMock()
 sys.modules['click'] = MagicMock()
 sys.modules['flask'] = MagicMock()
+sys.modules['werkzeug'] = MagicMock()
+sys.modules['werkzeug.security'] = MagicMock()
 sys.modules['flask_socketio'] = MagicMock()
 
 import main  # noqa: E402
@@ -45,9 +47,14 @@ class TestLdrDebounceSamples:
 
 
 class TestLdrSettingsPersistence:
-    def test_load_settings_returns_false_when_file_missing(self, tmp_path):
+    def test_load_settings_returns_defaults_when_file_missing(self, tmp_path):
         result = main._load_ldr_settings(str(tmp_path / "missing.json"))
-        assert result == {"auto_timer_enabled": False, "progressive_enabled": False}
+        assert result == {
+            "auto_timer_enabled": False,
+            "progressive_enabled": False,
+            "progressive_min_temp": main.LDR_PROGRESSIVE_MIN_TEMP_DEFAULT,
+            "off_reset_minutes": main.HEATER_OFF_RESET_MINUTES_DEFAULT,
+        }
 
     def test_load_settings_reads_existing_file(self, tmp_path):
         f = tmp_path / "ldr.json"

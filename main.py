@@ -242,10 +242,12 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
     _save_heater_state()
     _emit_heater_state()
     # Publish history update to MQTT and SocketIO
-    mqtt_bridge.publish_history(heater_history.get_history(20), heater_history.get_stats())
+    _history_events = heater_history.get_history(20)
+    _history_stats = heater_history.get_stats()
+    mqtt_bridge.publish_history(_history_events, _history_stats)
     _safe_emit("heater_history", {
-        "events": heater_history.get_history(20),
-        "stats": heater_history.get_stats(),
+        "events": _history_events,
+        "stats": _history_stats,
     })
 
     if confirmed is True:
@@ -471,7 +473,7 @@ def motor_control(steps, clockwise=True, steptype="Full"):
             steptype,  # Step type (Full,Half,1/4,1/8,1/16,1/32)
             steps,  # number of steps
             0.005,  # step delay [sec]
-            True,  # True = print verbose output
+            False,  # verbose output disabled — avoids per-step log spam on Pi
             0.05,  # initial delay [sec]
         )
         # Only clean up motor pins — leave LDR pin (GPIO 17) intact for polling thread
@@ -573,40 +575,43 @@ def _emit_start_timer_state():
 
 
 def _start_timer_worker():
-    """Background thread: wait until end time (or cancel), then reduce to intermediate temp and start reset timer."""
+    """Background thread: block for the full start-timer duration (or until cancelled),
+    then reduce to intermediate temp and kick off the reset timer.
+
+    Uses a single blocking Event.wait() for the full duration instead of a 1-second
+    poll loop, so the thread is idle (not waking every second) while waiting.
+    """
     global _start_timer_end_timestamp, _timer_end_timestamp, _timer_cancel_event
-    while True:
+    with _start_timer_lock:
+        end = _start_timer_end_timestamp
+        cancel_ev = _start_timer_cancel_event
+        intermediate_temp = _start_timer_intermediate_temp
+        reset_duration = _start_timer_reset_duration
+    if end is None or cancel_ev is None:
+        return
+    remaining = max(0.0, end - time.time())
+    if cancel_ev.wait(timeout=remaining):
+        # Cancelled before timer fired
         with _start_timer_lock:
-            end = _start_timer_end_timestamp
-            cancel_ev = _start_timer_cancel_event
-            intermediate_temp = _start_timer_intermediate_temp
-            reset_duration = _start_timer_reset_duration
-        if end is None or cancel_ev is None:
-            return
-        if cancel_ev.wait(timeout=1.0):
-            with _start_timer_lock:
-                _start_timer_end_timestamp = None
-            _emit_start_timer_state()
-            return
-        if time.time() >= end:
-            with _start_timer_lock:
-                _start_timer_end_timestamp = None
-            # Reduce to intermediate temperature
-            set_temperature(intermediate_temp)
-            _emit_start_timer_state()
-            # Now start the reset timer
-            duration_seconds = max(1, reset_duration * 60)
-            with _timer_lock:
-                if _timer_cancel_event:
-                    _timer_cancel_event.set()
-                _timer_cancel_event = threading.Event()
-                _timer_end_timestamp = time.time() + duration_seconds
-            threading.Thread(target=_timer_worker, daemon=True).start()
-            _emit_timer_state()
-            print(
-                f"Start timer expired: set to {intermediate_temp}°F, reset timer started for {reset_duration} min"
-            )
-            return
+            _start_timer_end_timestamp = None
+        _emit_start_timer_state()
+        return
+    # Timer fired — reduce to intermediate temperature and start reset timer
+    with _start_timer_lock:
+        _start_timer_end_timestamp = None
+    set_temperature(intermediate_temp)
+    _emit_start_timer_state()
+    duration_seconds = max(1, reset_duration * 60)
+    with _timer_lock:
+        if _timer_cancel_event:
+            _timer_cancel_event.set()
+        _timer_cancel_event = threading.Event()
+        _timer_end_timestamp = time.time() + duration_seconds
+    threading.Thread(target=_timer_worker, daemon=True).start()
+    _emit_timer_state()
+    print(
+        f"Start timer expired: set to {intermediate_temp}°F, reset timer started for {reset_duration} min"
+    )
 
 
 def _timer_worker():
@@ -685,7 +690,7 @@ def login_required(f):
 def init_flask():
     global flask_app
     sio = SocketIO(
-        flask_app, debug=True, logger=True, engineio_logger=True, async_mode="threading"
+        flask_app, debug=False, logger=False, engineio_logger=False, async_mode="threading"
     )
 
     sio.on_namespace(ControlNamespace(APP_NAMESPACE))
