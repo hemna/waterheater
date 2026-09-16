@@ -76,7 +76,8 @@ Yellow (SIG)   ───►  Pin 12  (GPIO 18, BCM)
                      └─ enable internal pull-up in software
 ```
 
-> The sensor outputs a pulse train on the yellow wire — each pulse = ~2.25 mL of water.
+> The sensor outputs a pulse train on the yellow wire. Per the GREDIA spec: F(Hz) = 5.5 × Q(L/min),
+> so at 1 L/min → 5.5 Hz → 330 pulses/min → **~3.03 mL per pulse**.
 > Pulse frequency is directly proportional to flow rate (1–60 L/min range).
 > The Pi's internal pull-up resistor on GPIO 18 is sufficient; no external resistor needed.
 
