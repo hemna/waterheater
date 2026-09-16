@@ -1,0 +1,7 @@
+[Unit]
+Description=Waterheater app watchdog
+After=waterheater.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/waboring/waterheater/scripts/app-watchdog.sh

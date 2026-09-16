@@ -1,0 +1,7 @@
+[Unit]
+Description=sshd connectivity watchdog
+After=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/waboring/waterheater/scripts/sshd-watchdog.sh
