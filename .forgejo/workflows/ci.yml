@@ -26,4 +26,4 @@ jobs:
           ruff check . --select=E,F --ignore=E501
       - name: JS syntax check
         run: |
-          find . -name '*.js' -not -path '*/node_modules/*' -not -path '*/.venv/*' -not -path '*/vendor/*' | head -50 | xargs -I{} node --check {} 2>&1 || true
+          find . -name '*.js' -not -path '*/node_modules/*' -not -path '*/.venv/*' -not -path '*/vendor/*' -print0 | xargs -0 -r -n1 node --check
