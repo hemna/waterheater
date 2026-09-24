@@ -58,6 +58,11 @@ AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth.json"
 RESET_TEMPERATURE = 108  # default temperature to reset to after timer
 WEB_PORT = 80
 
+# Sane bounds for the temperature setpoint — enforced server-side so MQTT
+# and SocketIO callers can't drive the motor beyond a physical range.
+TEMP_MIN = 60
+TEMP_MAX = 130
+
 # Timer state: reset to RESET_TEMPERATURE after a delay
 _timer_end_timestamp = None  # Unix time when reset will run, or None
 _timer_cancel_event = None  # threading.Event to cancel the active timer
@@ -98,6 +103,9 @@ _off_timer_lock = threading.Lock()
 
 # Motor lock — prevents concurrent motor operations from corrupting step state
 _motor_lock = threading.Lock()
+
+# Temperature lock — protects CURRENT_TEMPERATURE reads/writes across threads
+_temp_lock = threading.Lock()
 
 # SocketIO instance (set in __main__ or init_flask)
 sio = None
@@ -343,6 +351,7 @@ def _ldr_polling_thread():
 def _emit_ldr_timer_state():
     """Broadcast LDR auto-reduce timer end timestamp to all clients."""
     _safe_emit("ldr_timer_state", {"end_timestamp": _ldr_timer_end_timestamp})
+    mqtt_bridge.publish_state()
 
 
 def _start_ldr_timer():
@@ -431,6 +440,7 @@ def _ldr_progressive_worker():
 def _emit_off_timer_state():
     """Broadcast off-timer end timestamp to all clients."""
     _safe_emit("off_timer_state", {"end_timestamp": _off_timer_end_timestamp})
+    mqtt_bridge.publish_state()
 
 
 def _start_off_timer():
@@ -514,41 +524,52 @@ def load_temperature():
         try:
             with open(TEMPERATURE_FILE, "r") as f:
                 data = json.load(f)
-                CURRENT_TEMPERATURE = data.get(
-                    "current_temperature", CURRENT_TEMPERATURE
-                )
+                with _temp_lock:
+                    CURRENT_TEMPERATURE = data.get(
+                        "current_temperature", CURRENT_TEMPERATURE
+                    )
         except Exception as e:
-            CURRENT_TEMPERATURE = DEFAULT_INITIAL_TEMPERATURE
+            with _temp_lock:
+                CURRENT_TEMPERATURE = DEFAULT_INITIAL_TEMPERATURE
             print(f"Error loading temperature: {e}.")
             print(f"Using default temperature: {CURRENT_TEMPERATURE}")
     else:
-        CURRENT_TEMPERATURE = DEFAULT_INITIAL_TEMPERATURE
+        with _temp_lock:
+            CURRENT_TEMPERATURE = DEFAULT_INITIAL_TEMPERATURE
         print(f"No temperature file found, using default: {CURRENT_TEMPERATURE}")
     print(f"Loaded current temperature: {CURRENT_TEMPERATURE}")
 
 
 def save_temperature():
     global CURRENT_TEMPERATURE
-    print(f"Saving Current temperature: {CURRENT_TEMPERATURE} to {TEMPERATURE_FILE}")
+    with _temp_lock:
+        temperature = CURRENT_TEMPERATURE
+    print(f"Saving Current temperature: {temperature} to {TEMPERATURE_FILE}")
     try:
         with open(TEMPERATURE_FILE, "w") as f:
-            json.dump({"current_temperature": CURRENT_TEMPERATURE}, f)
+            json.dump({"current_temperature": temperature}, f)
     except Exception as e:
         print(f"Error saving temperature: {e}")
-    print(f"Saved Current temperature: {CURRENT_TEMPERATURE} to {TEMPERATURE_FILE}")
+    print(f"Saved Current temperature: {temperature} to {TEMPERATURE_FILE}")
 
 
 def change_temperature(degrees):
     global CURRENT_TEMPERATURE
+    degrees = int(degrees)
     print(f"Changing temperature by {degrees} degrees")
-    if degrees > 0:
-        steps = int(degrees * DEFAULT_STEPS_PER_DEGREE)
+    with _temp_lock:
+        target = max(TEMP_MIN, min(TEMP_MAX, CURRENT_TEMPERATURE + degrees))
+        diff = target - CURRENT_TEMPERATURE
+    if diff == 0:
+        return
+    if diff > 0:
+        steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
         motor_control(steps, clockwise=False, steptype="Full")
-        CURRENT_TEMPERATURE += degrees
     else:
-        steps = int(degrees * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(abs(steps), clockwise=True, steptype="Full")
-        CURRENT_TEMPERATURE += degrees
+        steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
+        motor_control(steps, clockwise=True, steptype="Full")
+    with _temp_lock:
+        CURRENT_TEMPERATURE = target
     save_temperature()
     _safe_emit(
         "temperature_status",
@@ -560,15 +581,18 @@ def change_temperature(degrees):
 
 def set_temperature(temperature):
     global CURRENT_TEMPERATURE
+    temperature = max(TEMP_MIN, min(TEMP_MAX, int(temperature)))
     print(f"Setting temperature to {temperature}")
-    diff = temperature - CURRENT_TEMPERATURE
+    with _temp_lock:
+        diff = temperature - CURRENT_TEMPERATURE
     if diff > 0:
         steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
         motor_control(steps, clockwise=False, steptype="Full")
     elif diff < 0:
         steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
         motor_control(steps, clockwise=True, steptype="Full")
-    CURRENT_TEMPERATURE = temperature
+    with _temp_lock:
+        CURRENT_TEMPERATURE = temperature
     save_temperature()
     _safe_emit(
         "temperature_status",
@@ -614,6 +638,7 @@ def _emit_start_timer_state():
         payload["intermediate_temperature"] = intermediate_temp
         payload["reset_duration"] = reset_duration
     _safe_emit("start_timer_state", payload)
+    mqtt_bridge.publish_state()
 
 
 def _start_timer_worker():
@@ -683,6 +708,270 @@ def _timer_worker():
             return
 
 
+# --- Shared command handlers (used by both SocketIO and MQTT) ---
+
+def _as_bool(value, default=False):
+    """Parse a boolean from JSON payloads that may arrive as bool or string."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _do_set_temperature_reading(temperature):
+    """Set the current temperature reading from the heater (manual override).
+
+    This is a manual override, since there is no way to read the temperature
+    from the heater.
+    """
+    global CURRENT_TEMPERATURE
+    temperature = max(TEMP_MIN, min(TEMP_MAX, int(temperature)))
+    with _temp_lock:
+        CURRENT_TEMPERATURE = temperature
+    save_temperature()
+    print(f"Setting temperature reading to {CURRENT_TEMPERATURE}")
+    _safe_emit("temperature_update", {"temperature": CURRENT_TEMPERATURE})
+    mqtt_bridge.publish_state()
+
+
+def _do_set_timer(duration_minutes):
+    """Start a reset timer. Returns True if started, False if ignored."""
+    global _timer_end_timestamp, _timer_cancel_event
+    if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+        _cancel_reset_timer()
+        print("Timer ignored: progressive cooling owns the lowered temperature")
+        return False
+    duration_minutes = float(duration_minutes)
+    duration_seconds = max(1, duration_minutes * 60)
+    with _timer_lock:
+        if _timer_cancel_event:
+            _timer_cancel_event.set()
+        _timer_cancel_event = threading.Event()
+        _timer_end_timestamp = time.time() + duration_seconds
+    threading.Thread(target=_timer_worker, daemon=True).start()
+    _emit_timer_state()
+    print(f"Timer set: reset to {RESET_TEMPERATURE}°F in {duration_minutes} min")
+    return True
+
+
+def _do_force_reset():
+    """Reset temperature to RESET_TEMPERATURE now and cancel the timer."""
+    global _timer_end_timestamp, _timer_cancel_event
+    with _timer_lock:
+        ev = _timer_cancel_event
+        _timer_end_timestamp = None
+        _timer_cancel_event = None
+    if ev:
+        ev.set()
+    set_temperature(RESET_TEMPERATURE)
+    _emit_timer_state()
+    print(f"Force reset: temperature set to {RESET_TEMPERATURE}°F, timer cancelled")
+
+
+def _do_set_start_timer(duration_minutes, intermediate_temp, reset_duration):
+    """Start a start timer: after duration_minutes, reduce to intermediate_temp,
+    then start the reset timer."""
+    global _start_timer_end_timestamp, _start_timer_cancel_event
+    global _start_timer_intermediate_temp, _start_timer_reset_duration
+    duration_seconds = max(1, float(duration_minutes) * 60)
+    with _start_timer_lock:
+        if _start_timer_cancel_event:
+            _start_timer_cancel_event.set()
+        _start_timer_cancel_event = threading.Event()
+        _start_timer_end_timestamp = time.time() + duration_seconds
+        _start_timer_intermediate_temp = int(intermediate_temp)
+        _start_timer_reset_duration = float(reset_duration)
+    threading.Thread(target=_start_timer_worker, daemon=True).start()
+    _emit_start_timer_state()
+    print(
+        f"Start timer set: {duration_minutes} min -> {_start_timer_intermediate_temp}°F -> {_start_timer_reset_duration} min reset timer"
+    )
+
+
+def _do_cancel_start_timer():
+    """Cancel the start timer without affecting the reset timer."""
+    global _start_timer_end_timestamp, _start_timer_cancel_event
+    with _start_timer_lock:
+        ev = _start_timer_cancel_event
+        _start_timer_end_timestamp = None
+        _start_timer_cancel_event = None
+    if ev:
+        ev.set()
+    _emit_start_timer_state()
+    print("Start timer cancelled")
+
+
+def _do_set_ldr_auto_timer(enabled):
+    """Enable or disable the LDR auto-timer. Persists to file."""
+    global _ldr_auto_timer_enabled, _ldr_timer_cancel_event
+    _ldr_auto_timer_enabled = _as_bool(enabled)
+    _save_ldr_settings({"auto_timer_enabled": _ldr_auto_timer_enabled, "progressive_enabled": _ldr_progressive_enabled})
+    if not _ldr_auto_timer_enabled:
+        # If disabling while a timer is running, cancel it
+        with _ldr_timer_lock:
+            ev = _ldr_timer_cancel_event
+        if ev:
+            ev.set()
+    elif _heater_on and _heater_on_since:
+        # Enabling while heater is already ON — start the timer now
+        _start_ldr_timer()
+    _emit_heater_state()
+    print(f"LDR auto-timer {'enabled' if _ldr_auto_timer_enabled else 'disabled'}")
+
+
+def _do_set_ldr_progressive(enabled):
+    """Enable or disable progressive cooling. Persists to file."""
+    global _ldr_progressive_enabled, _ldr_progressive_cancel_event, _ldr_progressive_active
+    _ldr_progressive_enabled = _as_bool(enabled)
+    _save_ldr_settings({"auto_timer_enabled": _ldr_auto_timer_enabled, "progressive_enabled": _ldr_progressive_enabled})
+    # If disabling while progressive cooling is running, cancel it
+    if not _ldr_progressive_enabled:
+        with _ldr_progressive_lock:
+            ev = _ldr_progressive_cancel_event
+        if ev:
+            ev.set()
+        _ldr_progressive_active = False
+    _emit_heater_state()
+    print(f"LDR progressive cooling {'enabled' if _ldr_progressive_enabled else 'disabled'}")
+
+
+def _do_set_off_timer_minutes(minutes):
+    """Set the off-timer reset delay in minutes. Persists to file."""
+    global _heater_off_reset_minutes
+    minutes = max(1, min(60, int(minutes)))  # clamp 1-60
+    _heater_off_reset_minutes = minutes
+    _save_ldr_settings({
+        "auto_timer_enabled": _ldr_auto_timer_enabled,
+        "progressive_enabled": _ldr_progressive_enabled,
+        "progressive_min_temp": _ldr_progressive_min_temp,
+        "off_reset_minutes": minutes,
+    })
+    _emit_heater_state()
+    print(f"Off-timer minutes set to {minutes}")
+
+
+def _do_set_progressive_floor(temperature):
+    """Set the progressive cooling floor temperature. Persists to file."""
+    global _ldr_progressive_min_temp
+    temperature = max(60, min(100, int(temperature)))  # clamp to sane range
+    _ldr_progressive_min_temp = temperature
+    _save_ldr_settings({
+        "auto_timer_enabled": _ldr_auto_timer_enabled,
+        "progressive_enabled": _ldr_progressive_enabled,
+        "progressive_min_temp": temperature,
+    })
+    _emit_heater_state()
+    print(f"Progressive floor set to {temperature}°F")
+
+
+def _do_start_progressive():
+    """Immediately reduce to LDR_REDUCED_TEMP and start progressive cooling."""
+    global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
+    _cancel_reset_timer()
+    # Cancel any running LDR auto-timer since we're doing it manually
+    with _ldr_timer_lock:
+        ev = _ldr_timer_cancel_event
+        _ldr_timer_end_timestamp = None
+    if ev:
+        ev.set()
+    _emit_ldr_timer_state()
+    # Save current temp and reduce (only lower, never raise toward LDR_REDUCED_TEMP)
+    _ldr_saved_temp = CURRENT_TEMPERATURE
+    if CURRENT_TEMPERATURE > LDR_REDUCED_TEMP:
+        set_temperature(LDR_REDUCED_TEMP)
+        print(f"Progressive now: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
+    else:
+        print(f"Progressive now: saved {_ldr_saved_temp}°F, already at/below {LDR_REDUCED_TEMP}°F, cooling from current")
+    # Start progressive cooling
+    _start_ldr_progressive()
+    _emit_heater_state()
+
+
+def _do_stop_progressive():
+    """Stop progressive cooling immediately."""
+    global _ldr_progressive_cancel_event, _ldr_progressive_active
+    with _ldr_progressive_lock:
+        ev = _ldr_progressive_cancel_event
+    if ev:
+        ev.set()
+    _ldr_progressive_active = False
+    _emit_heater_state()
+    print("Progressive cooling stopped manually")
+
+
+def _do_move_motor(steps, steptype="Full", clockwise=True):
+    """Move the motor N steps (test/calibration command)."""
+    motor_control(int(steps), clockwise=_as_bool(clockwise), steptype=steptype or "Full")
+    _safe_emit(
+        "motor_status",
+        {"message": f"Motor moving {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}"},
+    )
+
+
+def _do_get_history(limit=20):
+    """Return recent heater history and stats."""
+    return {
+        "events": heater_history.get_history(int(limit)),
+        "stats": heater_history.get_stats(),
+    }
+
+
+def _do_get_chart_data(period="day", offset=0):
+    """Return chart data for the requested period/offset."""
+    if period not in ("day", "week", "month", "year"):
+        period = "day"
+    offset = max(-50, min(0, int(offset)))
+    return {
+        "period": period,
+        "offset": offset,
+        "data": heater_history.get_chart_data(period, offset),
+    }
+
+
+def _mqtt_get_history():
+    """Publish heater history to the waterheater/history topic."""
+    payload = _do_get_history(20)
+    mqtt_bridge.publish_history(payload["events"], payload["stats"])
+
+
+def _mqtt_get_chart_data(period="day", offset=0):
+    """Publish chart data to the waterheater/chart_data topic."""
+    payload = _do_get_chart_data(period, offset)
+    mqtt_bridge.publish_chart_data(payload["period"], payload["offset"], payload["data"])
+
+
+def _build_mqtt_handlers() -> dict:
+    """Build the MQTT command-handler table (waterheater/cmd/<action>)."""
+    return {
+        "set_temperature": lambda d: set_temperature(int((d or {}).get("temperature", CURRENT_TEMPERATURE))),
+        "change_temperature": lambda d: change_temperature(int((d or {}).get("degrees", 0))),
+        "set_temperature_reading": lambda d: _do_set_temperature_reading(int((d or {}).get("temperature", CURRENT_TEMPERATURE))),
+        "set_timer": lambda d: _do_set_timer(float((d or {}).get("duration_minutes", 30))),
+        "force_reset": lambda d: _do_force_reset(),
+        "start_progressive": lambda d: _do_start_progressive(),
+        "stop_progressive": lambda d: _do_stop_progressive(),
+        "set_ldr_auto_timer": lambda d: _do_set_ldr_auto_timer((d or {}).get("enabled", False)),
+        "set_ldr_progressive": lambda d: _do_set_ldr_progressive((d or {}).get("enabled", False)),
+        "set_progressive_floor": lambda d: _do_set_progressive_floor((d or {}).get("temperature", LDR_PROGRESSIVE_MIN_TEMP_DEFAULT)),
+        "set_off_timer_minutes": lambda d: _do_set_off_timer_minutes((d or {}).get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT)),
+        "set_start_timer": lambda d: _do_set_start_timer(
+            (d or {}).get("duration_minutes", 15),
+            (d or {}).get("intermediate_temperature", 106),
+            (d or {}).get("reset_duration_minutes", 30),
+        ),
+        "cancel_start_timer": lambda d: _do_cancel_start_timer(),
+        "cancel_off_timer": lambda d: _cancel_off_timer(),
+        "move_motor": lambda d: _do_move_motor(
+            (d or {}).get("steps", 100),
+            (d or {}).get("steptype", "Full"),
+            (d or {}).get("clockwise", True),
+        ),
+        "get_history": lambda d: _mqtt_get_history(),
+        "get_chart_data": lambda d: _mqtt_get_chart_data((d or {}).get("period", "day"), (d or {}).get("offset", 0)),
+    }
+
+
 # --- Flask Web UI with SocketIO ---
 
 def _get_full_state() -> dict:
@@ -690,6 +979,8 @@ def _get_full_state() -> dict:
     with _heater_state_lock:
         on = _heater_on
         on_since = _heater_on_since
+    with _temp_lock:
+        temperature = CURRENT_TEMPERATURE
     with _timer_lock:
         timer_end = _timer_end_timestamp
     with _start_timer_lock:
@@ -697,14 +988,18 @@ def _get_full_state() -> dict:
         intermediate_temp = _start_timer_intermediate_temp
         reset_duration = _start_timer_reset_duration
     return {
-        "temperature": CURRENT_TEMPERATURE,
+        "temperature": temperature,
         "heater_on": on,
         "heater_on_since": on_since,
         "auto_timer_enabled": _ldr_auto_timer_enabled,
         "auto_timer_minutes": LDR_AUTO_TIMER_MINUTES,
+        "ldr_reduced_temp": LDR_REDUCED_TEMP,
         "progressive_enabled": _ldr_progressive_enabled,
         "progressive_active": _ldr_progressive_active,
         "progressive_min_temp": _ldr_progressive_min_temp,
+        "progressive_step": LDR_PROGRESSIVE_STEP,
+        "progressive_interval_minutes": LDR_PROGRESSIVE_INTERVAL_MINUTES,
+        "ldr_saved_temp": _ldr_saved_temp,
         "off_reset_minutes": _heater_off_reset_minutes,
         "timer_end_timestamp": timer_end,
         "reset_temperature": RESET_TEMPERATURE,
@@ -717,13 +1012,20 @@ def _get_full_state() -> dict:
     }
 
 
+_SECRET_KEY = os.environ.get("WATERHEATER_SECRET_KEY")
+if not _SECRET_KEY:
+    import secrets
+
+    _SECRET_KEY = secrets.token_hex(32)
+    print("WARNING: WATERHEATER_SECRET_KEY not set — using ephemeral session key (logins reset on restart)")
+
 flask_app = Flask(
     __name__,
     static_url_path="/static",
     static_folder="web/static",
     template_folder="web/templates",
 )
-flask_app.secret_key = os.environ.get("WATERHEATER_SECRET_KEY", "wh-session-key-rpi-2024")
+flask_app.secret_key = _SECRET_KEY
 
 
 def login_required(f):
@@ -770,227 +1072,99 @@ class ControlNamespace(Namespace):
     def on_get_history(self, data):
         """Client requests heater history."""
         limit = int(data.get("limit", 20)) if data else 20
-        _safe_emit("heater_history", {
-            "events": heater_history.get_history(limit),
-            "stats": heater_history.get_stats(),
-        })
+        _safe_emit("heater_history", _do_get_history(limit))
 
     def on_get_chart_data(self, data):
         """Client requests chart data for a given period (day/week/month/year) and offset."""
         period = data.get("period", "day") if data else "day"
-        if period not in ("day", "week", "month", "year"):
-            period = "day"
         offset = int(data.get("offset", 0)) if data else 0
-        # Clamp offset to prevent absurd ranges
-        offset = max(-50, min(0, offset))
-        _safe_emit("chart_data", {
-            "period": period,
-            "offset": offset,
-            "data": heater_history.get_chart_data(period, offset),
-        })
+        _safe_emit("chart_data", _do_get_chart_data(period, offset))
 
     def on_message(self, sid, data):
         print(f"on_message: Received message: {data}")
 
     def on_move_motor(self, data):
         print(f"on_move_motor: {data}")
-        steps = int(data.get("steps", 100))
-        steptype = data.get("steptype", "Full")
-        clockwise = bool(data.get("clockwise", True))
-        print(f"Moving motor {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}")
-        motor_control(steps, clockwise=clockwise, steptype=steptype)
-        _safe_emit(
-            "motor_status",
-            {"message": f"Motor moving {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}"},
-        )
+        steps = int(data.get("steps", 100)) if data else 100
+        steptype = data.get("steptype", "Full") if data else "Full"
+        clockwise = bool(data.get("clockwise", True)) if data else True
+        _do_move_motor(steps, steptype, clockwise)
 
     def on_change_temperature(self, data):
         print(f"on_change_temperature: {data}")
-        temperature = int(data.get("temperature", 1))
+        temperature = int(data.get("temperature", 1)) if data else 1
         change_temperature(temperature)
 
     def on_set_temperature_reading(self, data):
-        """Set the current temperature reading from the heater.
-
-        This is used to set the current temperature reading from the heater.
-        This is a manual override, since there is no way to read the temperature
-        from the heater.
-        """
-        global CURRENT_TEMPERATURE
+        """Set the current temperature reading from the heater (manual override)."""
         print(f"on_set_temperature_reading: {data}")
-        temperature = int(data.get("temperature", 1))
-        CURRENT_TEMPERATURE = temperature
-        save_temperature()
-        print(f"Setting temperature to {CURRENT_TEMPERATURE}")
-        _safe_emit("temperature_update", {"temperature": temperature})
+        temperature = int(data.get("temperature", 1)) if data else 1
+        _do_set_temperature_reading(temperature)
 
     def on_set_temperature(self, data):
         """User wants to set the temperature setting to this exact value."""
-        global CURRENT_TEMPERATURE
         print(f"on_set_temperature: {data}")
-        temperature = int(data.get("temperature", 1))
+        temperature = int(data.get("temperature", 1)) if data else 1
         set_temperature(temperature)
-        print(f"Setting temperature to {CURRENT_TEMPERATURE}")
 
     def on_set_timer(self, data):
         """Start a timer to reset temperature to RESET_TEMPERATURE after duration_minutes."""
-        global _timer_end_timestamp, _timer_cancel_event
-        if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
-            _cancel_reset_timer()
-            print("Timer ignored: progressive cooling owns the lowered temperature")
-            return
-        duration_minutes = float(data.get("duration_minutes", 30))
-        duration_seconds = max(1, duration_minutes * 60)
-        with _timer_lock:
-            if _timer_cancel_event:
-                _timer_cancel_event.set()
-            _timer_cancel_event = threading.Event()
-            _timer_end_timestamp = time.time() + duration_seconds
-        threading.Thread(target=_timer_worker, daemon=True).start()
-        _emit_timer_state()
-        print(f"Timer set: reset to {RESET_TEMPERATURE}°F in {duration_minutes} min")
+        print(f"on_set_timer: {data}")
+        duration_minutes = float(data.get("duration_minutes", 30)) if data else 30
+        _do_set_timer(duration_minutes)
 
     def on_force_reset(self, data):
         """Reset temperature to RESET_TEMPERATURE now and cancel the timer."""
-        global _timer_end_timestamp, _timer_cancel_event
-        with _timer_lock:
-            ev = _timer_cancel_event
-            _timer_end_timestamp = None
-            _timer_cancel_event = None
-        if ev:
-            ev.set()
-        set_temperature(RESET_TEMPERATURE)
-        _emit_timer_state()
-        print("Force reset: temperature set to 108°F, timer cancelled")
+        _do_force_reset()
 
     def on_set_start_timer(self, data):
         """Start a start timer: after duration_minutes, reduce to intermediate_temperature, then start reset timer."""
-        global _start_timer_end_timestamp, _start_timer_cancel_event
-        global _start_timer_intermediate_temp, _start_timer_reset_duration
-        duration_minutes = float(data.get("duration_minutes", 15))
-        intermediate_temp = int(data.get("intermediate_temperature", 106))
-        reset_duration = float(data.get("reset_duration_minutes", 30))
-        duration_seconds = max(1, duration_minutes * 60)
-        with _start_timer_lock:
-            if _start_timer_cancel_event:
-                _start_timer_cancel_event.set()
-            _start_timer_cancel_event = threading.Event()
-            _start_timer_end_timestamp = time.time() + duration_seconds
-            _start_timer_intermediate_temp = intermediate_temp
-            _start_timer_reset_duration = reset_duration
-        threading.Thread(target=_start_timer_worker, daemon=True).start()
-        _emit_start_timer_state()
-        print(
-            f"Start timer set: {duration_minutes} min -> {intermediate_temp}°F -> {reset_duration} min reset timer"
+        print(f"on_set_start_timer: {data}")
+        _do_set_start_timer(
+            float(data.get("duration_minutes", 15)) if data else 15,
+            int(data.get("intermediate_temperature", 106)) if data else 106,
+            float(data.get("reset_duration_minutes", 30)) if data else 30,
         )
 
     def on_cancel_start_timer(self, data):
         """Cancel the start timer without affecting the reset timer."""
-        global _start_timer_end_timestamp, _start_timer_cancel_event
-        with _start_timer_lock:
-            ev = _start_timer_cancel_event
-            _start_timer_end_timestamp = None
-            _start_timer_cancel_event = None
-        if ev:
-            ev.set()
-        _emit_start_timer_state()
-        print("Start timer cancelled")
+        _do_cancel_start_timer()
 
     def on_set_ldr_auto_timer(self, data):
         """Enable or disable the LDR auto-timer. Persists to file."""
-        global _ldr_auto_timer_enabled, _ldr_timer_cancel_event
-        enabled = bool(data.get("enabled", False))
-        _ldr_auto_timer_enabled = enabled
-        _save_ldr_settings({"auto_timer_enabled": enabled, "progressive_enabled": _ldr_progressive_enabled})
-        if not enabled:
-            # If disabling while a timer is running, cancel it
-            with _ldr_timer_lock:
-                ev = _ldr_timer_cancel_event
-            if ev:
-                ev.set()
-        elif _heater_on and _heater_on_since:
-            # Enabling while heater is already ON — start the timer now
-            _start_ldr_timer()
-        _emit_heater_state()
-        print(f"LDR auto-timer {'enabled' if enabled else 'disabled'}")
+        print(f"on_set_ldr_auto_timer: {data}")
+        enabled = data.get("enabled", False) if data else False
+        _do_set_ldr_auto_timer(enabled)
 
     def on_set_ldr_progressive(self, data):
         """Enable or disable progressive cooling. Persists to file."""
-        global _ldr_progressive_enabled, _ldr_progressive_cancel_event, _ldr_progressive_active
-        enabled = bool(data.get("enabled", False))
-        _ldr_progressive_enabled = enabled
-        _save_ldr_settings({"auto_timer_enabled": _ldr_auto_timer_enabled, "progressive_enabled": enabled})
-        # If disabling while progressive cooling is running, cancel it
-        if not enabled:
-            with _ldr_progressive_lock:
-                ev = _ldr_progressive_cancel_event
-            if ev:
-                ev.set()
-            _ldr_progressive_active = False
-        _emit_heater_state()
-        print(f"LDR progressive cooling {'enabled' if enabled else 'disabled'}")
+        print(f"on_set_ldr_progressive: {data}")
+        enabled = data.get("enabled", False) if data else False
+        _do_set_ldr_progressive(enabled)
 
     def on_set_off_timer_minutes(self, data):
         """Set the off-timer reset delay in minutes. Persists to file."""
-        global _heater_off_reset_minutes
-        minutes = int(data.get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT))
-        minutes = max(1, min(60, minutes))  # clamp 1-60
-        _heater_off_reset_minutes = minutes
-        _save_ldr_settings({
-            "auto_timer_enabled": _ldr_auto_timer_enabled,
-            "progressive_enabled": _ldr_progressive_enabled,
-            "progressive_min_temp": _ldr_progressive_min_temp,
-            "off_reset_minutes": minutes,
-        })
-        _emit_heater_state()
-        print(f"Off-timer minutes set to {minutes}")
+        print(f"on_set_off_timer_minutes: {data}")
+        minutes = int(data.get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT)) if data else HEATER_OFF_RESET_MINUTES_DEFAULT
+        _do_set_off_timer_minutes(minutes)
 
     def on_set_progressive_floor(self, data):
         """Set the progressive cooling floor temperature. Persists to file."""
-        global _ldr_progressive_min_temp
-        temp = int(data.get("temperature", LDR_PROGRESSIVE_MIN_TEMP_DEFAULT))
-        temp = max(60, min(temp, 100))  # clamp to sane range
-        _ldr_progressive_min_temp = temp
-        _save_ldr_settings({
-            "auto_timer_enabled": _ldr_auto_timer_enabled,
-            "progressive_enabled": _ldr_progressive_enabled,
-            "progressive_min_temp": temp,
-        })
-        _emit_heater_state()
-        print(f"Progressive floor set to {temp}°F")
+        print(f"on_set_progressive_floor: {data}")
+        temp = int(data.get("temperature", LDR_PROGRESSIVE_MIN_TEMP_DEFAULT)) if data else LDR_PROGRESSIVE_MIN_TEMP_DEFAULT
+        _do_set_progressive_floor(temp)
 
     def on_start_progressive_now(self, data):
         """Immediately reduce to LDR_REDUCED_TEMP and start progressive cooling."""
-        global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
-        _cancel_reset_timer()
-        # Cancel any running LDR auto-timer since we're doing it manually
-        with _ldr_timer_lock:
-            ev = _ldr_timer_cancel_event
-            _ldr_timer_end_timestamp = None
-        if ev:
-            ev.set()
-        _emit_ldr_timer_state()
-        # Save current temp and reduce (only lower, never raise toward LDR_REDUCED_TEMP)
-        _ldr_saved_temp = CURRENT_TEMPERATURE
-        if CURRENT_TEMPERATURE > LDR_REDUCED_TEMP:
-            set_temperature(LDR_REDUCED_TEMP)
-            print(f"Progressive now: saved {_ldr_saved_temp}°F, reduced to {LDR_REDUCED_TEMP}°F")
-        else:
-            print(f"Progressive now: saved {_ldr_saved_temp}°F, already at/below {LDR_REDUCED_TEMP}°F, cooling from current")
-        # Start progressive cooling
-        _start_ldr_progressive()
-        _emit_heater_state()
+        _do_start_progressive()
 
     def on_stop_progressive_now(self, data):
         """Stop progressive cooling immediately."""
-        global _ldr_progressive_cancel_event, _ldr_progressive_active
-        with _ldr_progressive_lock:
-            ev = _ldr_progressive_cancel_event
-        if ev:
-            ev.set()
-        _ldr_progressive_active = False
-        _emit_heater_state()
-        print("Progressive cooling stopped manually")
+        _do_stop_progressive()
+
+    def on_cancel_off_timer(self, data):
+        """Cancel the off-timer (heater turned back on)."""
+        _cancel_off_timer()
 
 
 @flask_app.route("/login", methods=["GET", "POST"])
@@ -1076,190 +1250,20 @@ if __name__ == "__main__":
         print("init_flask()")
         sio = init_flask()
 
-        # Initialize MQTT bridge with command handlers
-        def _mqtt_set_temperature(data):
-            temperature = int(data.get("temperature", CURRENT_TEMPERATURE))
-            set_temperature(temperature)
-
-        def _mqtt_change_temperature(data):
-            degrees = int(data.get("degrees", 0))
-            if degrees != 0:
-                change_temperature(degrees)
-
-        def _mqtt_set_temperature_reading(data):
-            global CURRENT_TEMPERATURE
-            temperature = int(data.get("temperature", CURRENT_TEMPERATURE))
-            CURRENT_TEMPERATURE = temperature
-            save_temperature()
-            _safe_emit("temperature_update", {"temperature": temperature})
-            mqtt_bridge.publish_state()
-
-        def _mqtt_set_timer(data):
-            global _timer_end_timestamp, _timer_cancel_event
-            if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
-                _cancel_reset_timer()
-                print("MQTT: Timer ignored: progressive cooling owns the lowered temperature")
-                return
-            duration_minutes = float(data.get("duration_minutes", 30))
-            duration_seconds = max(1, duration_minutes * 60)
-            with _timer_lock:
-                if _timer_cancel_event:
-                    _timer_cancel_event.set()
-                _timer_cancel_event = threading.Event()
-                _timer_end_timestamp = time.time() + duration_seconds
-            threading.Thread(target=_timer_worker, daemon=True).start()
-            _emit_timer_state()
-            print(f"MQTT: Timer set: reset to {RESET_TEMPERATURE}°F in {duration_minutes} min")
-
-        def _mqtt_force_reset(data):
-            global _timer_end_timestamp, _timer_cancel_event
-            with _timer_lock:
-                ev = _timer_cancel_event
-                _timer_end_timestamp = None
-                _timer_cancel_event = None
-            if ev:
-                ev.set()
-            set_temperature(RESET_TEMPERATURE)
-            _emit_timer_state()
-
-        def _mqtt_start_progressive(data):
-            global _ldr_saved_temp, _ldr_timer_cancel_event, _ldr_timer_end_timestamp
-            _cancel_reset_timer()
-            with _ldr_timer_lock:
-                ev = _ldr_timer_cancel_event
-                _ldr_timer_end_timestamp = None
-            if ev:
-                ev.set()
-            _emit_ldr_timer_state()
-            _ldr_saved_temp = CURRENT_TEMPERATURE
-            # Only lower, never raise toward LDR_REDUCED_TEMP (same as SocketIO handler)
-            if CURRENT_TEMPERATURE > LDR_REDUCED_TEMP:
-                set_temperature(LDR_REDUCED_TEMP)
-            _start_ldr_progressive()
-            _emit_heater_state()
-
-        def _mqtt_stop_progressive(data):
-            global _ldr_progressive_cancel_event, _ldr_progressive_active
-            with _ldr_progressive_lock:
-                ev = _ldr_progressive_cancel_event
-            if ev:
-                ev.set()
-            _ldr_progressive_active = False
-            _emit_heater_state()
-
-        def _mqtt_set_ldr_auto_timer(data):
-            global _ldr_auto_timer_enabled, _ldr_timer_cancel_event
-            enabled = bool(data.get("enabled", False))
-            _ldr_auto_timer_enabled = enabled
-            _save_ldr_settings({"auto_timer_enabled": enabled, "progressive_enabled": _ldr_progressive_enabled})
-            if not enabled:
-                with _ldr_timer_lock:
-                    ev = _ldr_timer_cancel_event
-                if ev:
-                    ev.set()
-            _emit_heater_state()
-
-        def _mqtt_set_ldr_progressive(data):
-            global _ldr_progressive_enabled, _ldr_progressive_cancel_event, _ldr_progressive_active
-            enabled = bool(data.get("enabled", False))
-            _ldr_progressive_enabled = enabled
-            _save_ldr_settings({"auto_timer_enabled": _ldr_auto_timer_enabled, "progressive_enabled": enabled})
-            if not enabled:
-                with _ldr_progressive_lock:
-                    ev = _ldr_progressive_cancel_event
-                if ev:
-                    ev.set()
-                _ldr_progressive_active = False
-            _emit_heater_state()
-
-        def _mqtt_set_start_timer(data):
-            global _start_timer_end_timestamp, _start_timer_cancel_event
-            global _start_timer_intermediate_temp, _start_timer_reset_duration
-            duration_minutes = float(data.get("duration_minutes", 15))
-            intermediate_temp = int(data.get("intermediate_temperature", 106))
-            reset_duration = float(data.get("reset_duration_minutes", 30))
-            duration_seconds = max(1, duration_minutes * 60)
-            with _start_timer_lock:
-                if _start_timer_cancel_event:
-                    _start_timer_cancel_event.set()
-                _start_timer_cancel_event = threading.Event()
-                _start_timer_end_timestamp = time.time() + duration_seconds
-                _start_timer_intermediate_temp = intermediate_temp
-                _start_timer_reset_duration = reset_duration
-            threading.Thread(target=_start_timer_worker, daemon=True).start()
-            _emit_start_timer_state()
-
-        def _mqtt_cancel_start_timer(data):
-            global _start_timer_end_timestamp, _start_timer_cancel_event
-            with _start_timer_lock:
-                ev = _start_timer_cancel_event
-                _start_timer_end_timestamp = None
-                _start_timer_cancel_event = None
-            if ev:
-                ev.set()
-            _emit_start_timer_state()
-
-        def _mqtt_get_chart_data(data):
-            period = data.get("period", "day") if data else "day"
-            if period not in ("day", "week", "month", "year"):
-                period = "day"
-            offset = int(data.get("offset", 0)) if data else 0
-            offset = max(-50, min(0, offset))
-            chart_data = heater_history.get_chart_data(period, offset)
-            mqtt_bridge.publish_chart_data(period, offset, chart_data)
-
-        def _mqtt_set_off_timer_minutes(data):
-            global _heater_off_reset_minutes
-            minutes = int(data.get("minutes", HEATER_OFF_RESET_MINUTES_DEFAULT))
-            minutes = max(1, min(60, minutes))
-            _heater_off_reset_minutes = minutes
-            _save_ldr_settings({
-                "auto_timer_enabled": _ldr_auto_timer_enabled,
-                "progressive_enabled": _ldr_progressive_enabled,
-                "progressive_min_temp": _ldr_progressive_min_temp,
-                "off_reset_minutes": minutes,
-            })
-            _emit_heater_state()
-
+        # Initialize MQTT bridge with command handlers (shared with SocketIO)
         mqtt_bridge.init(
             get_state_fn=_get_full_state,
-            cmd_handlers={
-                "set_temperature": _mqtt_set_temperature,
-                "change_temperature": _mqtt_change_temperature,
-                "set_temperature_reading": _mqtt_set_temperature_reading,
-                "set_timer": _mqtt_set_timer,
-                "force_reset": _mqtt_force_reset,
-                "start_progressive": _mqtt_start_progressive,
-                "stop_progressive": _mqtt_stop_progressive,
-                "set_ldr_auto_timer": _mqtt_set_ldr_auto_timer,
-                "set_off_timer_minutes": _mqtt_set_off_timer_minutes,
-                "set_ldr_progressive": _mqtt_set_ldr_progressive,
-                "set_progressive_floor": lambda data: _mqtt_set_progressive_floor(data),
-                "set_start_timer": _mqtt_set_start_timer,
-                "cancel_start_timer": _mqtt_cancel_start_timer,
-                "get_chart_data": _mqtt_get_chart_data,
-            },
+            cmd_handlers=_build_mqtt_handlers(),
             get_history_fn=lambda: (heater_history.get_history(20), heater_history.get_stats()),
         )
-
-        def _mqtt_set_progressive_floor(data):
-            global _ldr_progressive_min_temp
-            temp = int(data.get("temperature", LDR_PROGRESSIVE_MIN_TEMP_DEFAULT))
-            temp = max(60, min(temp, 100))
-            _ldr_progressive_min_temp = temp
-            _save_ldr_settings({
-                "auto_timer_enabled": _ldr_auto_timer_enabled,
-                "progressive_enabled": _ldr_progressive_enabled,
-                "progressive_min_temp": temp,
-            })
-            _emit_heater_state()
 
         threading.Thread(target=_ldr_polling_thread, daemon=True).start()
         print("LDR polling thread started")
         print(f"Starting web server with SocketIO on http://0.0.0.0:{WEB_PORT} ...")
+        _debug = os.environ.get("WATERHEATER_DEBUG", "").strip().lower() in ("1", "true", "yes")
         sio.run(
             flask_app,
-            debug=True,
+            debug=_debug,
             use_reloader=False,  # one process only — avoids two-process GPIO conflict
             host="0.0.0.0",
             port=WEB_PORT,

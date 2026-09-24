@@ -1,11 +1,38 @@
 """MQTT bridge for waterheater — publishes state and accepts commands via MQTT.
 
 Connects to a broker and exposes all waterheater functionality over MQTT topics:
-  Publish:  waterheater/state     — full JSON state on every change + heartbeat
+  Publish:   waterheater/state      — full JSON state on every change + heartbeat
+  Publish:   waterheater/history    — heater ON/OFF history (retained)
+  Publish:   waterheater/chart_data — chart data response (not retained)
   Subscribe: waterheater/cmd/<action> — JSON payload triggers the corresponding action
+
+Commands (waterheater/cmd/<action>):
+  set_temperature         {"temperature": int}
+  change_temperature      {"degrees": int}
+  set_temperature_reading {"temperature": int}
+  set_timer               {"duration_minutes": float}
+  force_reset             {}
+  start_progressive       {}
+  stop_progressive        {}
+  set_ldr_auto_timer      {"enabled": bool}
+  set_ldr_progressive     {"enabled": bool}
+  set_progressive_floor   {"temperature": int}
+  set_off_timer_minutes   {"minutes": int}
+  set_start_timer         {"duration_minutes": float, "intermediate_temperature": int,
+                           "reset_duration_minutes": float}
+  cancel_start_timer      {}
+  cancel_off_timer        {}
+  move_motor              {"steps": int, "steptype": str, "clockwise": bool}
+  get_history             {}
+  get_chart_data          {"period": "day|week|month|year", "offset": int}
+
+Broker settings come from environment variables (with safe local defaults):
+  MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD, MQTT_CLIENT_ID
+  MQTT_TLS=1 enables TLS (wraps the socket; use with MQTT_PORT=8883)
 """
 
 import json
+import os
 import threading
 import time
 
@@ -16,11 +43,12 @@ except ImportError:
     print("WARNING: paho-mqtt not installed — MQTT bridge disabled")
 
 
-MQTT_BROKER = "cloud.hemna.com"
-MQTT_PORT = 1883
-MQTT_USERNAME = "waterheater"
-MQTT_PASSWORD = "waterheater"
-MQTT_CLIENT_ID = "waterheater-pi"
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "cloud.hemna.com")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
+MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "waterheater")
+MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "waterheater")
+MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "waterheater-pi")
+MQTT_USE_TLS = os.environ.get("MQTT_TLS", "").strip().lower() in ("1", "true", "yes")
 MQTT_TOPIC_STATE = "waterheater/state"
 MQTT_TOPIC_HISTORY = "waterheater/history"
 MQTT_TOPIC_CHART_DATA = "waterheater/chart_data"
@@ -123,7 +151,7 @@ def publish_chart_data(period: str, offset: int, data: dict):
         return
     try:
         payload = json.dumps({"period": period, "offset": offset, "data": data})
-        _client.publish(MQTT_TOPIC_CHART_DATA, payload, qos=1, retain=True)
+        _client.publish(MQTT_TOPIC_CHART_DATA, payload, qos=1, retain=False)
     except Exception as e:
         print(f"MQTT: chart_data publish error: {e}")
 
@@ -150,6 +178,11 @@ def init(get_state_fn, cmd_handlers: dict, get_history_fn=None):
         print("MQTT: paho-mqtt not available, bridge not started")
         return
 
+    if MQTT_USERNAME == "waterheater" and MQTT_PASSWORD == "waterheater":
+        print("WARNING: MQTT using default credentials — set MQTT_USERNAME/MQTT_PASSWORD env vars")
+    if MQTT_USE_TLS:
+        print("MQTT: TLS enabled")
+
     _get_state_fn = get_state_fn
     _cmd_handlers = cmd_handlers
     _get_history_fn = get_history_fn
@@ -159,6 +192,8 @@ def init(get_state_fn, cmd_handlers: dict, get_history_fn=None):
         protocol=mqtt.MQTTv311,
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
     )
+    if MQTT_USE_TLS:
+        _client.tls_set()
     _client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
     _client.on_connect = _on_connect
     _client.on_disconnect = _on_disconnect
