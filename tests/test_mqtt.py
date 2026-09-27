@@ -486,9 +486,26 @@ class TestMqttConfig:
         monkeypatch.setattr(mqtt_bridge, "MQTT_BROKER", "cloud.hemna.com")
         monkeypatch.setattr(mqtt_bridge, "MQTT_USERNAME", "waterheater")
         monkeypatch.setattr(mqtt_bridge, "MQTT_PASSWORD", "waterheater")
+        monkeypatch.setattr(mqtt_bridge, "_MQTT_CREDS_EXPLICIT", False)
         with patch("mqtt_bridge.threading.Thread"):
             mqtt_bridge.init(lambda: {}, {})
         assert mqtt_bridge._get_state_fn is None
+
+    def test_init_remote_with_explicit_default_creds_starts(self, monkeypatch):
+        """Explicitly-set env creds (even if equal to the defaults) must not be blocked."""
+        fake_mqtt = SimpleNamespace(
+            Client=MagicMock(),
+            MQTTv311="3.1.1",
+            CallbackAPIVersion=SimpleNamespace(VERSION2=2),
+        )
+        monkeypatch.setattr(mqtt_bridge, "mqtt", fake_mqtt)
+        monkeypatch.setattr(mqtt_bridge, "MQTT_BROKER", "cloud.hemna.com")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_USERNAME", "waterheater")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_PASSWORD", "waterheater")
+        monkeypatch.setattr(mqtt_bridge, "_MQTT_CREDS_EXPLICIT", True)
+        with patch("mqtt_bridge.threading.Thread"):
+            mqtt_bridge.init(lambda: {"x": 1}, {})
+        assert mqtt_bridge._get_state_fn is not None
 
     def test_init_local_with_default_creds_starts(self, monkeypatch):
         fake_mqtt = SimpleNamespace(
