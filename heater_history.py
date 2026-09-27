@@ -3,10 +3,11 @@
 Persists to a JSON file. Keeps the last N events to avoid unbounded growth.
 """
 
+import calendar
+import datetime
 import json
 import os
 import threading
-import time
 
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heater_history.json")
 MAX_EVENTS = 100  # keep last N events
@@ -45,8 +46,14 @@ def init():
 
 
 def record_on(timestamp: float):
-    """Record a heater ON event (start of a heating cycle)."""
+    """Record a heater ON event (start of a heating cycle).
+
+    Discards any orphaned open event (e.g. after a restart that lost the
+    matching OFF transition) — its real end time is unknown, so it must not be
+    counted as a completed run.
+    """
     with _lock:
+        _history[:] = [e for e in _history if e["end"] is not None]
         _history.append({
             "start": timestamp,
             "end": None,
@@ -82,9 +89,6 @@ def get_chart_data(period: str = "day", offset: int = 0) -> dict:
     offset: 0 = current period, -1 = previous, -2 = two periods back, etc.
     Returns: {"labels": [...], "values": [...], "title": "..."} where values are minutes.
     """
-    import datetime
-    import calendar
-
     now = datetime.datetime.now()
     with _lock:
         completed = [e for e in _history if e["duration"] is not None]
@@ -230,7 +234,8 @@ def get_stats() -> dict:
         return {"total_events": 0, "avg_duration": 0, "max_duration": 0, "today_events": 0}
 
     durations = [e["duration"] for e in completed]
-    today_start = time.time() - (time.time() % 86400)  # midnight UTC approx
+    now = datetime.datetime.now()
+    today_start = datetime.datetime(now.year, now.month, now.day).timestamp()
     today_events = [e for e in completed if e["start"] >= today_start]
 
     return {

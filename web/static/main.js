@@ -144,7 +144,7 @@ function updateOffTimerDisplay(endTimestamp) {
         if (!currentOffTimerEnd) return;
         const now = Date.now() / 1000;
         const left = Math.max(0, currentOffTimerEnd - now);
-        el.textContent = 'Resetting to 108°F in ' + formatCountdown(left);
+        el.textContent = 'Heater off: reset to 108°F in ' + formatCountdown(left);
         if (left <= 0 && offTimerCountdownInterval) {
             clearInterval(offTimerCountdownInterval);
             offTimerCountdownInterval = null;
@@ -344,6 +344,12 @@ socket.on('heater_state', function(msg) {
         floorInput.value = msg.progressive_min_temp;
     }
 
+    // Sync off-timer minutes from server
+    var offTimerSelect = document.getElementById('offTimerMinutes');
+    if (offTimerSelect && msg.off_reset_minutes != null) {
+        offTimerSelect.value = String(msg.off_reset_minutes);
+    }
+
     // Update progressive cooling active state
     var progressiveBtn = document.getElementById('startProgressiveNow');
     var progressiveStatus = document.getElementById('progressiveStatus');
@@ -398,6 +404,15 @@ document.addEventListener('DOMContentLoaded', function() {
         setFloorBtn.addEventListener('click', function() {
             var temp = parseInt(document.getElementById('progressiveFloor').value, 10) || 80;
             socket.emit('set_progressive_floor', {'temperature': temp});
+        });
+    }
+
+    // Off-timer minutes setting
+    var offTimerSelect = document.getElementById('offTimerMinutes');
+    if (offTimerSelect) {
+        offTimerSelect.addEventListener('change', function() {
+            var minutes = parseInt(this.value, 10) || 5;
+            socket.emit('set_off_timer_minutes', {'minutes': minutes});
         });
     }
 

@@ -8,6 +8,7 @@ Usage:
     ./ctl.py force_reset
 """
 import sys
+import time
 import socketio
 
 COMMANDS_NO_ARGS = ["cancel_start_timer", "force_reset", "start_progressive_now", "stop_progressive_now"]
@@ -29,7 +30,7 @@ def main():
     sio = socketio.SimpleClient()
     sio.connect("http://localhost", namespace="/control", wait_timeout=3)
     sio.emit(cmd, data)
-    import time; time.sleep(0.5)
+    time.sleep(0.5)
     sio.disconnect()
     print(f"✓ {cmd} {data or ''}")
 
