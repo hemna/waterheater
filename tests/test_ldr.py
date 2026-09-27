@@ -87,6 +87,18 @@ class TestLdrSettingsPersistence:
         assert data["progressive_enabled"] is True
         assert data["off_reset_minutes"] == 15
 
+    def test_save_settings_recovers_corrupt_file(self, tmp_path):
+        f = tmp_path / "ldr.json"
+        f.write_text("{not valid json")
+        main._save_ldr_settings({"auto_timer_enabled": True}, str(f))
+        data = json.loads(f.read_text())
+        assert data["auto_timer_enabled"] is True
+
+    def test_save_settings_leaves_no_temp_file(self, tmp_path):
+        f = tmp_path / "ldr.json"
+        main._save_ldr_settings({"auto_timer_enabled": True}, str(f))
+        assert not (tmp_path / "ldr.json.tmp").exists()
+
 
 class TestLdrStateTransitions:
     def test_off_to_on_transition_sets_heater_on(self):
@@ -171,6 +183,20 @@ class TestLdrStateTransitions:
             main._ldr_poll_tick(0, [0, 0, 0])
         mock_start_timer.assert_not_called()
         mock_start_progressive.assert_called_once()
+
+    def test_off_to_on_does_not_start_progressive_when_temp_above_reset(self):
+        """Progressive cooling only starts when temp is below the reset value."""
+        main.CURRENT_TEMPERATURE = main.RESET_TEMPERATURE + 2
+        main._heater_on = False
+        main._ldr_auto_timer_enabled = False
+        main._ldr_progressive_enabled = True
+        main._ldr_progressive_active = False
+        with patch.object(main, 'sio', MagicMock()), \
+             patch('main._start_ldr_timer') as mock_start_timer, \
+             patch('main._start_ldr_progressive') as mock_start_progressive:
+            main._ldr_poll_tick(0, [0, 0, 0])
+        mock_start_timer.assert_not_called()
+        mock_start_progressive.assert_not_called()
 
 
 class TestLdrTimerWorker:

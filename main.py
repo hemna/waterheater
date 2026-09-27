@@ -107,6 +107,12 @@ _motor_lock = threading.Lock()
 # Temperature lock — protects CURRENT_TEMPERATURE reads/writes across threads
 _temp_lock = threading.Lock()
 
+# Change-level lock — serializes the full read-compute-move-commit in
+# change_temperature/set_temperature so concurrent callers can't both compute
+# a move from the same stale temperature. Reentrant so nested temperature
+# changes (e.g. progressive worker -> set_temperature) don't deadlock.
+_temp_change_lock = threading.RLock()
+
 # SocketIO instance (set in __main__ or init_flask)
 sio = None
 
@@ -148,15 +154,25 @@ def _load_ldr_settings(path: str = LDR_SETTINGS_FILE) -> dict:
 
 
 def _save_ldr_settings(settings: dict, path: str = LDR_SETTINGS_FILE) -> None:
-    """Persist LDR settings to JSON file (read-merge-write to avoid dropping keys)."""
+    """Persist LDR settings to JSON file (read-merge-write to avoid dropping keys).
+
+    Writes via a temporary file + os.replace so a power loss can't leave a
+    half-written file behind. A corrupt existing file is treated as empty so a
+    later save can repair it.
+    """
     try:
         existing = {}
         if os.path.exists(path):
-            with open(path, "r") as f:
-                existing = json.load(f)
+            try:
+                with open(path, "r") as f:
+                    existing = json.load(f)
+            except (ValueError, OSError):
+                existing = {}
         existing.update(settings)
-        with open(path, "w") as f:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(existing, f)
+        os.replace(tmp_path, path)
     except Exception as e:
         print(f"Failed to save LDR settings: {e}")
 
@@ -268,7 +284,7 @@ def _ldr_poll_tick(reading: int, buffer: list) -> None:
         if (
             _ldr_progressive_enabled
             and not _ldr_progressive_active
-            and CURRENT_TEMPERATURE != RESET_TEMPERATURE
+            and CURRENT_TEMPERATURE < RESET_TEMPERATURE
         ):
             _start_ldr_progressive()
         elif _ldr_auto_timer_enabled:
@@ -557,19 +573,20 @@ def change_temperature(degrees):
     global CURRENT_TEMPERATURE
     degrees = int(degrees)
     print(f"Changing temperature by {degrees} degrees")
-    with _temp_lock:
-        target = max(TEMP_MIN, min(TEMP_MAX, CURRENT_TEMPERATURE + degrees))
-        diff = target - CURRENT_TEMPERATURE
-    if diff == 0:
-        return
-    if diff > 0:
-        steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=False, steptype="Full")
-    else:
-        steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=True, steptype="Full")
-    with _temp_lock:
-        CURRENT_TEMPERATURE = target
+    with _temp_change_lock:
+        with _temp_lock:
+            target = max(TEMP_MIN, min(TEMP_MAX, CURRENT_TEMPERATURE + degrees))
+            diff = target - CURRENT_TEMPERATURE
+        if diff == 0:
+            return
+        if diff > 0:
+            steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
+            motor_control(steps, clockwise=False, steptype="Full")
+        else:
+            steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
+            motor_control(steps, clockwise=True, steptype="Full")
+        with _temp_lock:
+            CURRENT_TEMPERATURE = target
     save_temperature()
     _safe_emit(
         "temperature_status",
@@ -583,16 +600,17 @@ def set_temperature(temperature):
     global CURRENT_TEMPERATURE
     temperature = max(TEMP_MIN, min(TEMP_MAX, int(temperature)))
     print(f"Setting temperature to {temperature}")
-    with _temp_lock:
-        diff = temperature - CURRENT_TEMPERATURE
-    if diff > 0:
-        steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=False, steptype="Full")
-    elif diff < 0:
-        steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
-        motor_control(steps, clockwise=True, steptype="Full")
-    with _temp_lock:
-        CURRENT_TEMPERATURE = temperature
+    with _temp_change_lock:
+        with _temp_lock:
+            diff = temperature - CURRENT_TEMPERATURE
+        if diff > 0:
+            steps = int(diff * DEFAULT_STEPS_PER_DEGREE)
+            motor_control(steps, clockwise=False, steptype="Full")
+        elif diff < 0:
+            steps = int(abs(diff) * DEFAULT_STEPS_PER_DEGREE)
+            motor_control(steps, clockwise=True, steptype="Full")
+        with _temp_lock:
+            CURRENT_TEMPERATURE = temperature
     save_temperature()
     _safe_emit(
         "temperature_status",
@@ -660,11 +678,15 @@ def _start_timer_worker():
     if cancel_ev.wait(timeout=remaining):
         # Cancelled before timer fired
         with _start_timer_lock:
+            if _start_timer_cancel_event is not cancel_ev:
+                return  # superseded by a newer start timer
             _start_timer_end_timestamp = None
         _emit_start_timer_state()
         return
     # Timer fired — reduce to intermediate temperature and start reset timer
     with _start_timer_lock:
+        if _start_timer_cancel_event is not cancel_ev:
+            return  # superseded by a newer start timer
         _start_timer_end_timestamp = None
     set_temperature(intermediate_temp)
     _emit_start_timer_state()
@@ -692,11 +714,15 @@ def _timer_worker():
             return
         if cancel_ev.wait(timeout=1.0):
             with _timer_lock:
+                if _timer_cancel_event is not cancel_ev:
+                    return  # superseded by a newer timer
                 _timer_end_timestamp = None
             _emit_timer_state()
             return
         if time.time() >= end:
             with _timer_lock:
+                if _timer_cancel_event is not cancel_ev:
+                    return  # superseded by a newer timer
                 _timer_end_timestamp = None
             if _ldr_progressive_active:
                 print(
@@ -738,7 +764,7 @@ def _do_set_temperature_reading(temperature):
 def _do_set_timer(duration_minutes):
     """Start a reset timer. Returns True if started, False if ignored."""
     global _timer_end_timestamp, _timer_cancel_event
-    if _ldr_progressive_enabled and CURRENT_TEMPERATURE != RESET_TEMPERATURE:
+    if _ldr_progressive_enabled and CURRENT_TEMPERATURE < RESET_TEMPERATURE:
         _cancel_reset_timer()
         print("Timer ignored: progressive cooling owns the lowered temperature")
         return False
@@ -901,11 +927,34 @@ def _do_stop_progressive():
 
 
 def _do_move_motor(steps, steptype="Full", clockwise=True):
-    """Move the motor N steps (test/calibration command)."""
-    motor_control(int(steps), clockwise=_as_bool(clockwise), steptype=steptype or "Full")
+    """Move the motor N steps (test/calibration command).
+
+    Movement is clamped to the TEMP_MIN/TEMP_MAX range and CURRENT_TEMPERATURE
+    is kept in sync with the resulting dial position.
+    """
+    global CURRENT_TEMPERATURE
+    clockwise = _as_bool(clockwise)
+    steps = int(steps)
+    with _temp_change_lock:
+        with _temp_lock:
+            current = CURRENT_TEMPERATURE
+        if clockwise:
+            # CW lowers the dial toward TEMP_MIN
+            max_steps = int(max(0, (current - TEMP_MIN) * DEFAULT_STEPS_PER_DEGREE))
+            move = min(steps, max_steps)
+            target = current - move / DEFAULT_STEPS_PER_DEGREE
+        else:
+            # CCW raises the dial toward TEMP_MAX
+            max_steps = int(max(0, (TEMP_MAX - current) * DEFAULT_STEPS_PER_DEGREE))
+            move = min(steps, max_steps)
+            target = current + move / DEFAULT_STEPS_PER_DEGREE
+        if move > 0:
+            motor_control(move, clockwise=clockwise, steptype=steptype or "Full")
+        with _temp_lock:
+            CURRENT_TEMPERATURE = target
     _safe_emit(
         "motor_status",
-        {"message": f"Motor moving {steps} steps, {'CW' if clockwise else 'CCW'}, {steptype}"},
+        {"message": f"Motor moving {move} steps, {'CW' if clockwise else 'CCW'}, {steptype}"},
     )
 
 
@@ -1087,7 +1136,7 @@ class ControlNamespace(Namespace):
         print(f"on_move_motor: {data}")
         steps = int(data.get("steps", 100)) if data else 100
         steptype = data.get("steptype", "Full") if data else "Full"
-        clockwise = bool(data.get("clockwise", True)) if data else True
+        clockwise = data.get("clockwise", True) if data else True
         _do_move_motor(steps, steptype, clockwise)
 
     def on_change_temperature(self, data):

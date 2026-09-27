@@ -271,6 +271,50 @@ class TestTemperatureClamp:
         mock_motor.assert_not_called()
 
 
+class TestDoMoveMotor:
+    def test_clamps_to_temp_min_when_clockwise(self):
+        main.CURRENT_TEMPERATURE = main.TEMP_MIN + 1
+        with patch("main.motor_control") as mock_motor, \
+             patch.object(main, "sio", MagicMock()):
+            main._do_move_motor(10000, "Full", True)
+        assert mock_motor.call_args[0][0] == main.DEFAULT_STEPS_PER_DEGREE
+        assert main.CURRENT_TEMPERATURE == main.TEMP_MIN
+
+    def test_clamps_to_temp_max_when_ccw(self):
+        main.CURRENT_TEMPERATURE = main.TEMP_MAX - 1
+        with patch("main.motor_control") as mock_motor, \
+             patch.object(main, "sio", MagicMock()):
+            main._do_move_motor(10000, "Full", False)
+        assert mock_motor.call_args[0][0] == main.DEFAULT_STEPS_PER_DEGREE
+        assert main.CURRENT_TEMPERATURE == main.TEMP_MAX
+
+    def test_parses_string_false_clockwise_once(self):
+        """String 'false' must parse to False for BOTH the motor and the message."""
+        main.CURRENT_TEMPERATURE = 110
+        with patch("main.motor_control") as mock_motor, \
+             patch.object(main, "sio", MagicMock()) as mock_sio:
+            main._do_move_motor(14, "Full", "false")
+        assert mock_motor.call_args[0][0] == 14
+        assert mock_motor.call_args[1]["clockwise"] is False
+        assert main.CURRENT_TEMPERATURE == 111
+        msg = mock_sio.emit.call_args[0][1]["message"]
+        assert "CCW" in msg
+
+    def test_keeps_temperature_in_sync_with_partial_steps(self):
+        main.CURRENT_TEMPERATURE = 110
+        with patch("main.motor_control") as mock_motor, \
+             patch.object(main, "sio", MagicMock()):
+            main._do_move_motor(7, "Full", True)
+        assert mock_motor.call_args[0][0] == 7
+        assert main.CURRENT_TEMPERATURE == 110 - 7 / main.DEFAULT_STEPS_PER_DEGREE
+
+    def test_move_motor_handler_passes_raw_clockwise_string(self):
+        handlers = main._build_mqtt_handlers()
+        with patch("main._do_move_motor") as mock_move:
+            handlers["move_motor"]({"steps": 50, "clockwise": "false"})
+        mock_move.assert_called_once_with(50, "Full", "false")
+
+
 class TestDoSetTimer:
     def test_returns_false_when_progressive_owns_temp(self):
         main.CURRENT_TEMPERATURE = 80
@@ -311,13 +355,14 @@ class TestHeaterHistoryFixes:
     def teardown_method(self):
         heater_history._history = []
 
-    def test_record_on_closes_orphan_open_event(self, tmp_path, monkeypatch):
+    def test_record_on_discards_orphan_open_event(self, tmp_path, monkeypatch):
+        """An orphaned open event (end=None) is discarded, not counted as completed."""
         monkeypatch.setattr(heater_history, "HISTORY_FILE", str(tmp_path / "h.json"))
         heater_history._history = [{"start": 100.0, "end": None, "duration": None}]
         heater_history.record_on(200.0)
-        assert heater_history._history[0]["end"] == 200.0
-        assert heater_history._history[0]["duration"] == 100.0
-        assert len(heater_history._history) == 2
+        assert len(heater_history._history) == 1
+        assert heater_history._history[0]["start"] == 200.0
+        assert heater_history._history[0]["end"] is None
 
     def test_stats_today_uses_local_midnight(self, tmp_path, monkeypatch):
         import datetime
@@ -401,3 +446,48 @@ class TestMqttBridge:
         mqtt_bridge._get_state_fn = lambda: {"temperature": 100}
         mqtt_bridge.publish_state()
         mock_client.publish.assert_not_called()
+
+
+class TestMqttConfig:
+    def test_remote_broker_defaults_to_tls_8883(self):
+        use_tls, port = mqtt_bridge._resolve_tls_and_port("cloud.hemna.com", None)
+        assert use_tls is True
+        assert port == 8883
+
+    def test_local_broker_defaults_to_plaintext_1883(self):
+        for host in ("localhost", "127.0.0.1", "::1"):
+            use_tls, port = mqtt_bridge._resolve_tls_and_port(host, None)
+            assert use_tls is False
+            assert port == 1883
+
+    def test_explicit_tls_env_wins(self):
+        assert mqtt_bridge._resolve_tls_and_port("localhost", "1") == (True, 8883)
+        assert mqtt_bridge._resolve_tls_and_port("cloud.hemna.com", "0") == (False, 1883)
+
+    def test_init_remote_with_default_creds_does_not_start(self, monkeypatch):
+        fake_mqtt = SimpleNamespace(
+            Client=MagicMock(),
+            MQTTv311="3.1.1",
+            CallbackAPIVersion=SimpleNamespace(VERSION2=2),
+        )
+        monkeypatch.setattr(mqtt_bridge, "mqtt", fake_mqtt)
+        monkeypatch.setattr(mqtt_bridge, "MQTT_BROKER", "cloud.hemna.com")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_USERNAME", "waterheater")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_PASSWORD", "waterheater")
+        with patch("mqtt_bridge.threading.Thread"):
+            mqtt_bridge.init(lambda: {}, {})
+        assert mqtt_bridge._get_state_fn is None
+
+    def test_init_local_with_default_creds_starts(self, monkeypatch):
+        fake_mqtt = SimpleNamespace(
+            Client=MagicMock(),
+            MQTTv311="3.1.1",
+            CallbackAPIVersion=SimpleNamespace(VERSION2=2),
+        )
+        monkeypatch.setattr(mqtt_bridge, "mqtt", fake_mqtt)
+        monkeypatch.setattr(mqtt_bridge, "MQTT_BROKER", "localhost")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_USERNAME", "waterheater")
+        monkeypatch.setattr(mqtt_bridge, "MQTT_PASSWORD", "waterheater")
+        with patch("mqtt_bridge.threading.Thread"):
+            mqtt_bridge.init(lambda: {"x": 1}, {})
+        assert mqtt_bridge._get_state_fn is not None

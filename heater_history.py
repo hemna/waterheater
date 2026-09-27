@@ -48,15 +48,12 @@ def init():
 def record_on(timestamp: float):
     """Record a heater ON event (start of a heating cycle).
 
-    Closes any orphaned open event first (e.g. after a restart that lost
-    the matching OFF transition) so history never shows two concurrent runs.
+    Discards any orphaned open event (e.g. after a restart that lost the
+    matching OFF transition) — its real end time is unknown, so it must not be
+    counted as a completed run.
     """
     with _lock:
-        for event in reversed(_history):
-            if event["end"] is None:
-                event["end"] = timestamp
-                event["duration"] = round(timestamp - event["start"], 1)
-                break
+        _history[:] = [e for e in _history if e["end"] is not None]
         _history.append({
             "start": timestamp,
             "end": None,

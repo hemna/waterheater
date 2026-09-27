@@ -186,6 +186,58 @@ class TestStartTimerWorkerBlockingWait:
         mock_set_temp.assert_not_called()
 
 
+class TestTimerWorkerOwnership:
+    """A superseded worker must not clear a newer timer's state."""
+
+    def test_superseded_start_timer_does_not_clear_new_state(self):
+        old_ev = MagicMock()
+
+        def _replace_while_waiting(*args, **kwargs):
+            # Simulates _do_set_start_timer replacing this worker's timer while it waits.
+            with main._start_timer_lock:
+                main._start_timer_cancel_event = threading.Event()
+                main._start_timer_end_timestamp = 888888.0
+            return True
+
+        old_ev.wait.side_effect = _replace_while_waiting
+        with main._start_timer_lock:
+            main._start_timer_end_timestamp = 111111.0
+            main._start_timer_cancel_event = old_ev
+            main._start_timer_intermediate_temp = 106
+            main._start_timer_reset_duration = 30
+
+        with patch.object(main, "sio", MagicMock()), \
+             patch("main.set_temperature") as mock_set_temp:
+            main._start_timer_worker()
+
+        mock_set_temp.assert_not_called()
+        with main._start_timer_lock:
+            assert main._start_timer_end_timestamp == 888888.0
+
+    def test_superseded_reset_timer_does_not_clear_new_state(self):
+        old_ev = MagicMock()
+
+        def _replace_while_waiting(*args, **kwargs):
+            # Simulates _do_set_timer replacing this worker's timer while it waits.
+            with main._timer_lock:
+                main._timer_cancel_event = threading.Event()
+                main._timer_end_timestamp = 888888.0
+            return True
+
+        old_ev.wait.side_effect = _replace_while_waiting
+        with main._timer_lock:
+            main._timer_end_timestamp = 111111.0
+            main._timer_cancel_event = old_ev
+
+        with patch.object(main, "sio", MagicMock()), \
+             patch("main.set_temperature") as mock_set_temp:
+            main._timer_worker()
+
+        mock_set_temp.assert_not_called()
+        with main._timer_lock:
+            assert main._timer_end_timestamp == 888888.0
+
+
 # ---------------------------------------------------------------------------
 # Fix 4 — deduplicate heater_history calls in _ldr_poll_tick
 # ---------------------------------------------------------------------------

@@ -28,7 +28,10 @@ Commands (waterheater/cmd/<action>):
 
 Broker settings come from environment variables (with safe local defaults):
   MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD, MQTT_CLIENT_ID
-  MQTT_TLS=1 enables TLS (wraps the socket; use with MQTT_PORT=8883)
+  MQTT_TLS=1 forces TLS on; MQTT_TLS=0 forces it off. Remote (non-localhost)
+  brokers default to TLS on port 8883; local brokers default to plaintext on
+  port 1883. The bridge will not start against a remote broker using the
+  default waterheater/waterheater credentials.
 """
 
 import json
@@ -43,12 +46,28 @@ except ImportError:
     print("WARNING: paho-mqtt not installed — MQTT bridge disabled")
 
 
+_MQTT_LOCAL_BROKERS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _resolve_tls_and_port(broker: str, tls_env: str | None):
+    """Decide TLS usage and default port for a broker.
+
+    An explicit MQTT_TLS env value wins; otherwise remote brokers default to
+    TLS (port 8883) and local brokers to plaintext (port 1883).
+    """
+    if tls_env is not None:
+        use_tls = tls_env.strip().lower() in ("1", "true", "yes")
+    else:
+        use_tls = broker not in _MQTT_LOCAL_BROKERS
+    return use_tls, 8883 if use_tls else 1883
+
+
 MQTT_BROKER = os.environ.get("MQTT_BROKER", "cloud.hemna.com")
-MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
+MQTT_USE_TLS, _default_port = _resolve_tls_and_port(MQTT_BROKER, os.environ.get("MQTT_TLS"))
+MQTT_PORT = int(os.environ.get("MQTT_PORT", _default_port))
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "waterheater")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "waterheater")
 MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "waterheater-pi")
-MQTT_USE_TLS = os.environ.get("MQTT_TLS", "").strip().lower() in ("1", "true", "yes")
 MQTT_TOPIC_STATE = "waterheater/state"
 MQTT_TOPIC_HISTORY = "waterheater/history"
 MQTT_TOPIC_CHART_DATA = "waterheater/chart_data"
@@ -179,6 +198,12 @@ def init(get_state_fn, cmd_handlers: dict, get_history_fn=None):
         return
 
     if MQTT_USERNAME == "waterheater" and MQTT_PASSWORD == "waterheater":
+        if MQTT_BROKER not in _MQTT_LOCAL_BROKERS:
+            print(
+                "WARNING: MQTT using default credentials against a remote broker — "
+                "bridge not started; set MQTT_USERNAME/MQTT_PASSWORD env vars"
+            )
+            return
         print("WARNING: MQTT using default credentials — set MQTT_USERNAME/MQTT_PASSWORD env vars")
     if MQTT_USE_TLS:
         print("MQTT: TLS enabled")

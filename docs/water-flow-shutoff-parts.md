@@ -13,7 +13,8 @@ inline on the ¾" PEX cold water supply line feeding the water heater.
 | 2 | **U.S. Solid ¾" Motorized Ball Valve** — 9–24V AC/DC, 2-wire auto-return, ¾" NPT | $41.52 | [amazon.com/dp/B06XX6XYD8](https://www.amazon.com/dp/B06XX6XYD8) |
 | 3 | **JBtek 4-Channel 5V Relay Module** — active LOW, optocoupler isolated, for Raspberry Pi | $5.95 | [amazon.com/dp/B00KTEN3TM](https://www.amazon.com/dp/B00KTEN3TM) |
 | 4 | **12V 2A DC Wall Adapter** — 110V→12V, 5.5/2.1mm barrel connector, on/off switch | $8.85 | [amazon.com/dp/B087CS6NHV](https://www.amazon.com/dp/B087CS6NHV) |
-| 5 | **Lead-Free Brass ¾" PEX × ¾" NPT Male Adapters** — 4-pack | $11.99 | [amazon.com/dp/B0D7YMLTXF](https://www.amazon.com/dp/B0D7YMLTXF) |
+| 5 | **Lead-Free Brass ¾" PEX × ¾" NPT Male Adapters** — for the ball valve (¾" NPT port); 4-pack | $11.99 | [amazon.com/dp/B0D7YMLTXF](https://www.amazon.com/dp/B0D7YMLTXF) |
+| 5a | **Female G3/4-to-PEX Adapter (BSPP)** — for the flow sensor (G3/4 BSPP port); do not use NPT here | ~$10 | search "G3/4 BSPP to PEX" |
 | 6 | **iCrimp Angle PEX Crimper Kit** — ½" & ¾", pipe cutter + go/no-go gauge, ASTM F1807 | $85.49 | [amazon.com/dp/B018VNUCSC](https://www.amazon.com/dp/B018VNUCSC) |
 | 7 | **¾" Copper Crimp Rings — 25-pack** | $11.99 | [amazon.com/dp/B0CPPL43ZT](https://www.amazon.com/dp/B0CPPL43ZT) |
 
@@ -25,8 +26,10 @@ inline on the ¾" PEX cold water supply line feeding the water heater.
 
 Your cold water supply line is **¾" PEX** (measured OD = 0.88", standard OD = 0.875").
 
-Both the flow sensor (G¾" BSP threads) and the ball valve (¾" NPT threads) connect
-inline via the brass ¾" PEX barb × ¾" NPT adapters (item 5) and copper crimp rings (item 7).
+The flow sensor has a **G3/4 BSPP male** port and the ball valve has a **¾" NPT male** port —
+these are different thread standards and are **not** interchangeable. Connect the sensor through a
+female G3/4-to-PEX adapter (BSPP, with an appropriate BSPP seal) and the ball valve through the
+brass ¾" PEX barb × ¾" NPT adapters (item 5), both secured with copper crimp rings (item 7).
 
 **Install order on the cold supply line:**
 
@@ -79,7 +82,12 @@ Yellow (SIG)   ───►  Pin 12  (GPIO 18, BCM)
 > The sensor outputs a pulse train on the yellow wire. Per the GREDIA spec: F(Hz) = 5.5 × Q(L/min),
 > so at 1 L/min → 5.5 Hz → 330 pulses/min → **~3.03 mL per pulse**.
 > Pulse frequency is directly proportional to flow rate (1–60 L/min range).
-> The Pi's internal pull-up resistor on GPIO 18 is sufficient; no external resistor needed.
+>
+> ⚠️ **Voltage compatibility:** the sensor is powered at **5V**, but the Pi's GPIO is **3.3V-only**
+> (not 5V-tolerant). Before wiring the yellow SIG wire to GPIO 18, confirm the sensor's output is
+> 3.3V-safe (open-collector/open-drain with the Pi's internal pull-up) — otherwise use a level
+> shifter or optocoupler between SIG and GPIO 18. Do not rely on the Pi's internal pull-up alone
+> without establishing signal voltage compatibility.
 
 ---
 
@@ -99,12 +107,12 @@ Pin 22 (GPIO25)───►  IN1
 ```
 
 **How it works:**
-- `GPIO 25 HIGH` → relay closes → 12V reaches valve → **valve OPENS**, water flows
-- `GPIO 25 LOW`  → relay opens  → 12V removed  → spring returns valve → **valve CLOSES**
+- `GPIO 25 LOW`  → relay energized → COM–NO closed → 12V reaches valve → **valve OPENS**, water flows
+- `GPIO 25 HIGH` → relay de-energized → COM–NO open → 12V removed → spring returns valve → **valve CLOSES**
 
 > The valve is **normally closed** (spring-return) — if the Pi crashes, loses power, or
-> GPIO goes LOW for any reason, the valve automatically shuts. This is the safe failure mode
-> for a water shutoff.
+> GPIO 25 is high/floating for any reason (relay de-energized), the valve automatically shuts.
+> This is the safe failure mode for a water shutoff.
 
 ---
 
@@ -166,8 +174,9 @@ GPIO.output(VALVE_GPIO_PIN, GPIO.HIGH)  # close valve
 3. **Slide crimp ring** onto PEX tube before pushing onto barb fitting.
 4. **Push PEX** fully onto the brass barb adapter (item 5) until it bottoms out.
 5. **Crimp** with the ¾" jaw. Use the go/no-go gauge to verify each crimp.
-6. **Thread** the brass adapters into the flow sensor and ball valve ports (¾" NPT).
-   Use PTFE (Teflon) tape on all NPT threads — 2–3 wraps clockwise.
+6. **Thread** the brass ¾" NPT adapters into the ball valve port; use PTFE (Teflon) tape on the
+   NPT threads — 2–3 wraps clockwise. Connect the flow sensor's G3/4 **BSPP** port with the
+   female G3/4-to-PEX adapter (BSPP uses a sealing washer, not PTFE tape).
 7. **Install flow sensor upstream** (closer to the supply), ball valve downstream
    (closer to the heater inlet).
 8. Restore water supply and check for leaks before powering up electronics.
