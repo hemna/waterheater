@@ -232,6 +232,9 @@ class TestMqttStatePublishing:
 
 
 class TestTemperatureClamp:
+    def test_temp_max_is_150(self):
+        assert main.TEMP_MAX == 150
+
     def test_set_temperature_clamps_high(self):
         main.CURRENT_TEMPERATURE = 110
         with patch("main.motor_control"), patch("main.save_temperature"), \
@@ -313,6 +316,15 @@ class TestDoMoveMotor:
         with patch("main._do_move_motor") as mock_move:
             handlers["move_motor"]({"steps": 50, "clockwise": "false"})
         mock_move.assert_called_once_with(50, "Full", "false")
+
+    def test_negative_steps_are_rejected(self):
+        """Negative steps must not move the dial or change CURRENT_TEMPERATURE."""
+        main.CURRENT_TEMPERATURE = 110
+        with patch("main.motor_control") as mock_motor, \
+             patch.object(main, "sio", MagicMock()):
+            main._do_move_motor(-28, "Full", True)
+        mock_motor.assert_not_called()
+        assert main.CURRENT_TEMPERATURE == 110
 
 
 class TestDoSetTimer:

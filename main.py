@@ -61,7 +61,7 @@ WEB_PORT = 80
 # Sane bounds for the temperature setpoint — enforced server-side so MQTT
 # and SocketIO callers can't drive the motor beyond a physical range.
 TEMP_MIN = 60
-TEMP_MAX = 130
+TEMP_MAX = 150
 
 # Timer state: reset to RESET_TEMPERATURE after a delay
 _timer_end_timestamp = None  # Unix time when reset will run, or None
@@ -934,7 +934,7 @@ def _do_move_motor(steps, steptype="Full", clockwise=True):
     """
     global CURRENT_TEMPERATURE
     clockwise = _as_bool(clockwise)
-    steps = int(steps)
+    steps = max(0, int(steps))
     with _temp_change_lock:
         with _temp_lock:
             current = CURRENT_TEMPERATURE
